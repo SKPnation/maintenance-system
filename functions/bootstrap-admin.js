@@ -1,0 +1,5 @@
+// Run once with Google Application Default Credentials and FIREBASE_PROJECT_ID.
+// Example: FIREBASE_PROJECT_ID=my-project ADMIN_EMAIL=admin@example.edu ADMIN_PASSWORD='...' ADMIN_NAME='Initial Admin' node bootstrap-admin.js
+const admin=require('firebase-admin');
+admin.initializeApp({projectId:process.env.FIREBASE_PROJECT_ID});
+(async()=>{const {ADMIN_EMAIL,ADMIN_PASSWORD,ADMIN_NAME}=process.env;if(!ADMIN_EMAIL||!ADMIN_PASSWORD||!ADMIN_NAME)throw new Error('Set ADMIN_EMAIL, ADMIN_PASSWORD, ADMIN_NAME');let u;try{u=await admin.auth().getUserByEmail(ADMIN_EMAIL)}catch(e){if(e.code!=='auth/user-not-found')throw e;u=await admin.auth().createUser({email:ADMIN_EMAIL,password:ADMIN_PASSWORD,displayName:ADMIN_NAME})}await admin.firestore().doc(`users/${u.uid}`).set({name:ADMIN_NAME,email:ADMIN_EMAIL.toLowerCase(),role:'admin',active:true,category:'',trade:'',createdAt:admin.firestore.FieldValue.serverTimestamp()},{merge:true});console.log('Initial administrator provisioned:',u.uid);process.exit(0)})().catch(e=>{console.error(e);process.exit(1)});

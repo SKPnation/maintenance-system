@@ -38,6 +38,8 @@ Change the temporary password immediately. For production use, switch to an invi
 - PB-09: `addWorkOrderNote` / `listWorkOrderNotes` — non-empty progress or completion notes stored in `workOrders/{id}/notes` with author and server timestamp, listed oldest first. Only the assigned technician can add; the assigned technician and the category's manager can read. Firestore rules deny all client reads of these subcollections, so requesters cannot see them.
 - PB-10: Requesters read only their own `requests` (Firestore rules). Each request carries requester-safe fields kept in sync by the backend: `assignedCategory`, `workOrderStatus`, `workOrderStatusUpdatedAt`, `serviceScheduledAt`, `serviceDurationHours` and a `history` of submitted/approved/rejected/scheduled/rescheduled/work-status events. Internal notes are never copied onto the request.
 
+- Priority levels: stored in `priorityLevels` (admin-only `importPriorityLevels`, `savePriorityLevel`, `deletePriorityLevel`; all active users can read). Until an admin clicks **Save to database** on Priority Levels, the built-in Critical/High/Medium/Low set is used. Active levels, with their descriptions and targets, are given to the AI, offered in manager forms and enforced by the server. A level already used by requests or work orders can't be renamed or deleted (mark it inactive), and at least one level must stay active.
+
 ### Tests
 `cd maintenance-functions && npm test` runs the scheduling/status/note rules and the callable handlers against an in-memory Firestore stand-in (access control, conflicts, history, ordering). Re-run against the Firebase Emulator Suite before production.
 

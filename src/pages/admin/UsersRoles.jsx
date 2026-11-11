@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { db, api } from '../../firebase.js';
+import { TRADES } from '../../data/mock.js';
 const ROLES=['requester','manager','technician','admin'];
 export default function UsersRoles(){
  const [users,setUsers]=useState([]),[form,setForm]=useState({name:'',email:'',role:'requester',password:'',category:'',trade:''}),[busy,setBusy]=useState(false),[error,setError]=useState(''),[editing,setEditing]=useState(null);
@@ -15,7 +16,7 @@ export default function UsersRoles(){
  {!editing&&<label>Temporary password<input style={field} type="password" required minLength={8} value={form.password} onChange={e=>setForm({...form,password:e.target.value})}/></label>}
  <label>Role<select style={field} value={form.role} onChange={e=>setForm({...form,role:e.target.value})}>{ROLES.map(r=><option key={r} value={r}>{r}</option>)}</select></label>
  {form.role==='manager'&&<label>Managed category<input style={field} required value={form.category} onChange={e=>setForm({...form,category:e.target.value})}/></label>}
- {form.role==='technician'&&<label>Trade<input style={field} required value={form.trade} onChange={e=>setForm({...form,trade:e.target.value})}/></label>}
+ {form.role==='technician'&&<label>Trade<select style={field} required value={form.trade} onChange={e=>setForm({...form,trade:e.target.value})}><option value="">Select a trade</option>{[...new Set([...TRADES,form.trade].filter(Boolean))].map(t=><option key={t} value={t}>{t}</option>)}</select></label>}
  <div style={{alignSelf:'end',display:'flex',gap:8}}><button className="btn btn-primary" disabled={busy}>{busy?'Saving…':editing?'Save changes':'Create account'}</button>{editing&&<button type="button" className="btn" onClick={()=>{setEditing(null);setForm({name:'',email:'',role:'requester',password:'',category:'',trade:''})}}>Cancel</button>}</div>
  </form>{error&&<p role="alert" style={{color:'#b91c1c'}}>{error}</p>}</div>
  <div className="card" style={{padding:22,marginTop:20,overflowX:'auto'}}><h3>Accounts ({users.length})</h3><table style={{width:'100%',textAlign:'left',borderSpacing:'0 12px'}}><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead><tbody>{users.map(u=><tr key={u.id}><td>{u.name}</td><td>{u.email}</td><td>{u.role}</td><td>{u.active?'Active':'Inactive'}</td><td><button className="btn" onClick={()=>{setEditing(u.id);setForm({name:u.name||'',email:u.email||'',role:u.role,category:u.category||'',trade:u.trade||''})}}>Edit</button> <button className="btn" onClick={()=>toggle(u)}>{u.active?'Deactivate':'Activate'}</button></td></tr>)}</tbody></table></div></div>

@@ -22,6 +22,35 @@ const STATUS_TRANSITIONS = {
   "In Progress": ["Completed"],
 };
 
+// Trades are typed by admins and suggested by AI, so compare loosely:
+// "HVAC", "hvac technician" and "HVAC Tech" are the same trade.
+const TRADE_ALIASES = {
+  "electrician": "electrical",
+  "electric": "electrical",
+  "plumber": "plumbing",
+  "general": "general maintenance",
+  "maintenance": "general maintenance",
+  "handyman": "general maintenance",
+  "heating ventilation and air conditioning": "hvac",
+  "air conditioning": "hvac",
+};
+
+function normalizeTrade(value) {
+  const text = String(value || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .replace(/\b(technician|technicians|tech|specialist|engineer|worker)\b/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  return TRADE_ALIASES[text] || text;
+}
+
+function tradesMatch(a, b) {
+  const left = normalizeTrade(a);
+  return Boolean(left) && left === normalizeTrade(b);
+}
+
 function invalid(message) {
   return new HttpsError("invalid-argument", message);
 }
@@ -267,9 +296,11 @@ module.exports = {
   STATUS_TRANSITIONS,
   describeWindow,
   findScheduleConflict,
+  normalizeTrade,
   parseSchedule,
   sameSchedule,
   scheduleSnapshot,
+  tradesMatch,
   validateNote,
   validateStatusTransition,
   zonedTimeToUtc,

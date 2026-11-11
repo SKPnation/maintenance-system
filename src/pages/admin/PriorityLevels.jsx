@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Icon from '../../components/Icon.jsx';
 import {
   Button, Card, Field, IconButton, Input, Modal, PageHeader, Pill, Select, StatCard, Textarea, Toggle,
@@ -6,6 +6,7 @@ import {
 import { useStore } from '../../context/StoreContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { fmtDuration } from '../../data/format.js';
+import { configured } from '../../firebase.js';
 
 const COLORS = [
   { value: '#EF4444', label: 'Red' }, { value: '#F97316', label: 'Orange' }, { value: '#FBBF24', label: 'Yellow' },
@@ -23,18 +24,32 @@ const STAT = { Critical: ['red', 'alertCircle'], High: ['orange', 'alertCircle']
 const blank = () => ({ id: `p${Date.now()}`, name: '', color: '#1D6AF0', description: '', response: { value: 1, unit: 'hours' }, resolution: { value: 1, unit: 'business days' }, active: true, isNew: true });
 
 export default function PriorityLevels() {
-  const { priorities, savePriority, deletePriority } = useStore();
+  const { priorities, prioritiesSaved, savePriority, deletePriority, importPriorities } = useStore();
   const toast = useToast();
   const [editing, setEditing] = useState(() => ({ ...priorities[0] }));
   const [errors, setErrors] = useState({});
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  // Levels arrive from Firestore after the first render; keep the form pointed at a real level.
+  useEffect(() => {
+    if (!editing.isNew && !priorities.some((p) => p.id === editing.id) && priorities[0]) setEditing({ ...priorities[0] });
+  }, [priorities.map((p) => p.id).join()]);
+
+  const importToDatabase = async () => {
+    setBusy(true);
+    try {
+      const { count } = await importPriorities();
+      toast(`${count} priority levels saved to the database`);
+    } catch (e) { toast(e.message, 'error'); } finally { setBusy(false); }
+  };
 
   const set = (k, v) => setEditing((e) => ({ ...e, [k]: v }));
   const setTime = (k, part, v) => setEditing((e) => ({ ...e, [k]: { ...e[k], [part]: part === 'value' ? Number(v) : v, label: undefined } }));
 
   const select = (p) => { setEditing({ ...p }); setErrors({}); };
 
-  const save = () => {
+  const save = async () => {
     const e = {};
     if (!editing.name.trim()) e.name = 'Enter a name.';
     else if (priorities.some((p) => p.id !== editing.id && p.name.toLowerCase() === editing.name.trim().toLowerCase())) e.name = 'A priority level with this name already exists.';
@@ -43,17 +58,29 @@ export default function PriorityLevels() {
     setErrors(e);
     if (Object.keys(e).length) return;
     const { isNew, ...clean } = editing;
-    savePriority({ ...clean, name: clean.name.trim(), description: clean.description.trim() });
-    setEditing({ ...clean });
-    toast(isNew ? `${clean.name} added` : `${clean.name} saved`);
+    const level = { ...clean, name: clean.name.trim(), description: clean.description.trim() };
+    setBusy(true);
+    try {
+      const result = await savePriority({ ...level, isNew });
+      setEditing({ ...level, id: result?.id || level.id });
+      toast(isNew ? `${level.name} added` : `${level.name} saved`);
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const remove = (p) => {
-    deletePriority(p.id);
+  const remove = async (p) => {
     setConfirmDelete(null);
-    toast(`${p.name} deleted`);
-    const next = priorities.find((x) => x.id !== p.id);
-    if (next) select(next);
+    try {
+      await deletePriority(p.id);
+      toast(`${p.name} deleted`);
+      const next = priorities.find((x) => x.id !== p.id);
+      if (next) select(next);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
   };
 
   const original = priorities.find((p) => p.id === editing.id);
@@ -67,6 +94,16 @@ export default function PriorityLevels() {
             title="Priority Levels"
             subtitle="Configure the priority levels used for maintenance requests and work orders in your organization."
           />
+
+          {configured && !prioritiesSaved && (
+            <div className="info-card" role="status" style={{ alignItems: 'center' }}>
+              <Icon name="info" size={24} />
+              <div style={{ flex: 1, fontSize: 14 }}>
+                <strong>These levels are only saved in this browser.</strong> Save them to the database so the AI, managers and the server all use them. You can keep editing afterwards.
+              </div>
+              <Button icon="save" onClick={importToDatabase} disabled={busy}>{busy ? 'Saving…' : 'Save to database'}</Button>
+            </div>
+          )}
 
           <div className="stats" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
             {priorities.slice(0, 4).map((p) => {
@@ -162,7 +199,7 @@ export default function PriorityLevels() {
               <div className="row gap-16" style={{ marginTop: 10 }}>
                 {!editing.isNew && <Button variant="danger" icon="trash" onClick={() => setConfirmDelete(original)} style={{ width: 150, height: 46 }}>Delete</Button>}
                 <Button variant="secondary" onClick={() => (original ? select(original) : select(priorities[0]))} style={{ height: 46 }}>Cancel</Button>
-                <Button onClick={save} style={{ flex: 1, height: 46, fontSize: 15.5 }}>{editing.isNew ? 'Add Level' : 'Save Changes'}</Button>
+                <Button onClick={save} disabled={busy} style={{ flex: 1, height: 46, fontSize: 15.5 }}>{editing.isNew ? 'Add Level' : 'Save Changes'}</Button>
               </div>
             </div>
           </Card>
@@ -175,7 +212,7 @@ export default function PriorityLevels() {
           onClose={() => setConfirmDelete(null)}
           actions={<><Button variant="secondary" onClick={() => setConfirmDelete(null)}>Cancel</Button><Button variant="danger" icon="trash" onClick={() => remove(confirmDelete)}>Delete</Button></>}
         >
-          <p>Requests and work orders that already use this priority keep it, but it won't be offered for new ones. Consider marking it inactive instead.</p>
+          <p>Levels already used by requests or work orders can't be deleted. Mark them inactive instead, so they stop being offered for new work.</p>
         </Modal>
       )}
     </div>

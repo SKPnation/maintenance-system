@@ -5,6 +5,7 @@ import { useAuth } from '../../context/AuthContext.jsx';
 import { useStore } from '../../context/StoreContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { fmtServiceWindow, localDateKey } from '../../data/format.js';
+import { tradesMatch } from '../../data/trades.js';
 
 const CLOSED = ['Completed', 'Cancelled'];
 
@@ -65,7 +66,7 @@ export default function WorkOrders() {
                       <td><PriorityPill priority={w.priority} size="sm" /></td>
                       <td><StatusPill status={w.status} size="sm" /></td>
                       <td>
-                        <Select className="input-sm" style={{ width: 200 }} aria-label={`Technician for ${w.title}`} disabled={saving === w.id || closed} placeholder="Unassigned" options={technicians.map((t) => ({ value: t.id, label: `${t.name} (${t.trade || 'Technician'})` }))} value={w.technicianId || ''} onChange={(e) => assign(w, e.target.value)} />
+                        <TechnicianSelect w={w} technicians={technicians} disabled={saving === w.id || closed} onChange={(id) => assign(w, id)} />
                       </td>
                       <td>{w.scheduledAt ? fmtServiceWindow(w.scheduledAt, w.durationHours) : <span className="muted">Not scheduled</span>}</td>
                       <td>
@@ -93,6 +94,26 @@ export default function WorkOrders() {
           )}
         </Modal>
       )}
+    </div>
+  );
+}
+
+// Only technicians whose trade matches the work order, so the choice will be accepted.
+function TechnicianSelect({ w, technicians, disabled, onChange }) {
+  const qualified = technicians.filter((t) => tradesMatch(t.trade, w.trade) || t.id === w.technicianId);
+  return (
+    <div className="stack" style={{ gap: 4 }}>
+      <Select
+        className="input-sm"
+        style={{ width: 210 }}
+        aria-label={`Technician for ${w.title}`}
+        disabled={disabled}
+        placeholder="Unassigned"
+        options={qualified.map((t) => ({ value: t.id, label: `${t.name} (${t.trade || 'no trade'})` }))}
+        value={w.technicianId || ''}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      {qualified.length === 0 && <span className="sub">No active {w.trade || 'matching'} technicians</span>}
     </div>
   );
 }

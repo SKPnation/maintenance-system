@@ -138,3 +138,12 @@ test("validateNote rejects empty, oversized or unknown notes", () => {
     assert.throws(() => workflow.validateNote(text, kind), (error) => error.code === "invalid-argument");
   }
 });
+
+test("trades match loosely across admin and AI wording", () => {
+  for (const [a, b] of [["HVAC", "HVAC Technician"], ["hvac tech", "HVAC"], ["Electrician", "Electrical"], ["Plumber", "Plumbing"], ["General Maintenance", "general maintenance technician"]]) {
+    assert.equal(workflow.tradesMatch(a, b), true, `${a} ~ ${b}`);
+  }
+  for (const [a, b] of [["HVAC", "Electrician"], ["", ""], [null, "HVAC"], ["Plumber", "HVAC Technician"]]) {
+    assert.equal(workflow.tradesMatch(a, b), false, `${a} !~ ${b}`);
+  }
+});

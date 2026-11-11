@@ -222,3 +222,74 @@ test("request carries requester-safe progress, schedule and history", async () =
   assert.deepEqual(req.history.map((h) => h.type), ["scheduled", "work_status"]);
   assert.ok(!JSON.stringify(req).includes("Secret"));
 });
+
+test("assignment accepts equivalent trade wording and explains real mismatches", async () => {
+  db.seed("users/techShort", {active: true, role: "technician", trade: "HVAC", name: "Usman"});
+  db.seed("users/sparky", {active: true, role: "technician", trade: "Electrician", name: "Sparky"});
+  db.seed("workOrders/woOpen", {title: "x", category: "HVAC", trade: "HVAC Technician", status: "Unassigned", technicianId: ""});
+
+  await call("mgr", "assignTechnician", {id: "woOpen", technicianId: "techShort"});
+  assert.equal(db.read("workOrders/woOpen").technicianId, "techShort");
+
+  await rejects(call("mgr", "assignTechnician", {id: "woOpen", technicianId: "sparky"}), "invalid-argument", /Sparky's trade \(Electrician\) does not match/);
+  await rejects(call("mgr", "assignTechnician", {id: "woOpen", technicianId: "techOff"}), "invalid-argument", /active technician/);
+});
+
+// ---------------- Priority levels ----------------
+
+const DEMO_LEVELS = require("../priorities").DEFAULT_PRIORITY_LEVELS.map(({id, rank, ...level}) => level);
+const pendingRequest = (id, extra = {}) => db.seed(`requests/${id}`, {requesterId: "req", status: "submitted", analysisStatus: "completed", routedCategory: "HVAC", priority: "Medium", ...extra});
+
+test("before any levels are saved, the built-in defaults apply", async () => {
+  pendingRequest("p1");
+  await call("mgr", "updateRequest", {id: "p1", changes: {priority: "High"}});
+  assert.equal(db.read("requests/p1").priority, "High");
+  await rejects(call("mgr", "updateRequest", {id: "p1", changes: {priority: "Urgent"}}), "invalid-argument", /Priority must be one of/);
+});
+
+test("admin imports the demo levels once; others cannot", async () => {
+  await rejects(call("mgr", "importPriorityLevels", {levels: DEMO_LEVELS}), "permission-denied");
+  await rejects(call("admin", "savePriorityLevel", {...DEMO_LEVELS[0]}), "failed-precondition", /first/);
+
+  const result = await call("admin", "importPriorityLevels", {levels: DEMO_LEVELS});
+  assert.equal(result.count, 4);
+  const saved = [...db.store.entries()].filter(([k]) => k.startsWith("priorityLevels/")).map(([, v]) => v);
+  assert.deepEqual(saved.sort((a, b) => a.rank - b.rank).map((l) => l.name), ["Critical", "High", "Medium", "Low"]);
+
+  await rejects(call("admin", "importPriorityLevels", {levels: DEMO_LEVELS}), "failed-precondition", /already saved/);
+});
+
+test("saved levels drive validation: new levels allowed, inactive ones rejected", async () => {
+  await call("admin", "importPriorityLevels", {levels: DEMO_LEVELS});
+  const {id} = await call("admin", "savePriorityLevel", {name: "Urgent", color: "#7C3AED", description: "Needs action today.", response: {value: 2, unit: "hours"}, resolution: {value: 1, unit: "business days"}, active: true});
+  assert.equal(db.read(`priorityLevels/${id}`).rank, 5);
+
+  pendingRequest("p2");
+  await call("mgr", "updateRequest", {id: "p2", changes: {priority: "urgent"}});
+  assert.equal(db.read("requests/p2").priority, "Urgent", "stored with the canonical name");
+
+  const lowId = [...db.store.entries()].find(([k, v]) => k.startsWith("priorityLevels/") && v.name === "Low")[0].split("/")[1];
+  await call("admin", "savePriorityLevel", {...DEMO_LEVELS[3], id: lowId, active: false});
+  await rejects(call("mgr", "updateRequest", {id: "p2", changes: {priority: "Low"}}), "invalid-argument");
+});
+
+test("level rules: unique names, valid targets, one must stay active, used levels can't be renamed or deleted", async () => {
+  await call("admin", "importPriorityLevels", {levels: DEMO_LEVELS});
+  const levelId = (name) => [...db.store.entries()].find(([k, v]) => k.startsWith("priorityLevels/") && v.name === name)[0].split("/")[1];
+
+  await rejects(call("admin", "savePriorityLevel", {...DEMO_LEVELS[0], name: "high"}), "already-exists");
+  await rejects(call("admin", "savePriorityLevel", {...DEMO_LEVELS[0], name: "X", resolution: {value: 0, unit: "hours"}}), "invalid-argument");
+  await rejects(call("admin", "savePriorityLevel", {...DEMO_LEVELS[0], name: "X", color: "red"}), "invalid-argument");
+
+  // wo1 etc. are seeded without priority; give one a "High" priority.
+  db.seed("workOrders/woHigh", {title: "x", category: "HVAC", priority: "High", status: "Assigned"});
+  await rejects(call("admin", "savePriorityLevel", {...DEMO_LEVELS[1], id: levelId("High"), name: "Very High"}), "failed-precondition", /can't be renamed/);
+  await rejects(call("admin", "deletePriorityLevel", {id: levelId("High")}), "failed-precondition", /inactive instead/);
+
+  // Unused level: rename and delete are fine.
+  await call("admin", "savePriorityLevel", {...DEMO_LEVELS[3], id: levelId("Low"), name: "Routine"});
+  await call("admin", "deletePriorityLevel", {id: levelId("Routine")});
+
+  for (const name of ["Critical", "Medium"]) await call("admin", "deletePriorityLevel", {id: levelId(name)});
+  await rejects(call("admin", "savePriorityLevel", {...DEMO_LEVELS[1], id: levelId("High"), active: false}), "failed-precondition", /stay active/);
+});

@@ -5,7 +5,7 @@ import { Button, Card, EmptyState, Modal, PageHeader, PriorityPill, Select, Stat
 import { ScheduleForm, ScheduleHistory } from '../../components/Scheduling.jsx';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useStore } from '../../context/StoreContext.jsx';
-import { fmtDate, fmtHours, fmtServiceWindow, sameDay, toDate } from '../../data/format.js';
+import { fmtDate, fmtHours, sameDay, toDate } from '../../data/format.js';
 
 const CLOSED = ['Completed', 'Cancelled'];
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -77,7 +77,7 @@ export default function ManagerCalendar() {
         </section>
 
         <div className="stack gap-16">
-          <Card title={`Needs scheduling (${needsTime.length})`} icon="clock" bodyClass="flush">
+          <Card title={`Needs scheduling (${needsTime.length})`} icon="clock">
             {needsTime.length === 0 ? <p className="muted" style={{ padding: '4px 0 8px', fontSize: 14 }}>Every assigned work order has a time.</p> : (
               <div className="stack">
                 {needsTime.map((w) => (
@@ -90,7 +90,7 @@ export default function ManagerCalendar() {
             )}
           </Card>
           {unassigned.length > 0 && (
-            <div className="info-card"><Icon name="info" size={22} /><div style={{ fontSize: 14 }}>{unassigned.length} work order{unassigned.length === 1 ? '' : 's'} need a technician before scheduling. Assign one from <Link className="link" to="/manager/work-orders">Work Orders</Link>.</div></div>
+            <div className="info-card"><Icon name="info" size={22} /><div style={{ fontSize: 14 }}>{unassigned.length} work order{unassigned.length === 1 ? ' needs' : 's need'} a technician before scheduling. Assign one from <Link className="link" to="/manager/work-orders">Work Orders</Link>.</div></div>
           )}
         </div>
       </div>
@@ -100,7 +100,6 @@ export default function ManagerCalendar() {
           {!selected ? <EmptyState title="Work order not found" text="It may belong to another category." /> : (
             <div className="stack gap-16">
               <div className="row gap-12 wrap"><StatusPill status={selected.status} size="sm" /><PriorityPill priority={selected.priority} size="sm" /><span className="muted" style={{ fontSize: 14 }}>{selected.location}</span></div>
-              {selected.scheduledAt && <div style={{ fontSize: 14 }}><span className="muted">Scheduled: </span>{fmtServiceWindow(selected.scheduledAt, selected.durationHours)}</div>}
               <ScheduleForm key={`${selected.id}-${selected.scheduledAt}`} workOrder={selected} technicianName={techName(selected.technicianId)} onSaved={() => setHistoryKey((k) => k + 1)} onCancel={() => open(null)} />
               <div>
                 <div className="section-title" style={{ fontSize: 14, marginBottom: 8 }}>Schedule history</div>

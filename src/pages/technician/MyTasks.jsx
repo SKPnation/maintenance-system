@@ -66,7 +66,7 @@ export default function MyTasks() {
     assigned: today.length,
     inProgress: mine.filter((w) => w.status === 'In Progress').length,
     completed: mine.filter((w) => w.status === 'Completed').length,
-    overdue: mine.filter((w) => w.status !== 'Completed' && w.scheduledAt && at(w.scheduledAt) + Number(w.durationHours || 0) * 3600000 < now.getTime()).length,
+    overdue: mine.filter((w) => w.status !== 'Completed' && w.scheduledAt && at(w.scheduledAt) + Number(w.durationHours || 0) * 3600000 < now.getTime() && !sameDay(w.scheduledAt, now)).length,
   };
 
   const shift = (dir) => {

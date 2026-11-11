@@ -10,6 +10,9 @@ import { CATEGORIES, PRIORITY_NAMES, TRADES } from '../../data/mock.js';
 import { fmtDateTime } from '../../data/format.js';
 import { tradesMatch } from '../../data/trades.js';
 
+// Snap the AI's free-text trade to one of the standard trades (or none).
+const standardTrade = (value) => TRADES.find((t) => tradesMatch(t, value)) || '';
+
 function formatTimestamp(value) {
   if (!value) return 'Not available';
   const date = value?.toDate?.() || (value?.seconds ? new Date(value.seconds * 1000) : new Date(value));
@@ -28,7 +31,7 @@ export default function ReviewWorkOrder() {
   const [form, setForm] = useState(() => ({
     category: r?.ai?.category || '',
     priority: r?.priority || 'Medium',
-    trade: r?.ai?.trade || '',
+    trade: standardTrade(r?.ai?.trade),
     safety: r?.safety ? 'Yes' : 'No',
     title: r ? `Inspect and service: ${r.description.split('.')[0].slice(0, 60)}` : '',
     description: r?.ai?.suggestedAction || '',
@@ -42,7 +45,7 @@ export default function ReviewWorkOrder() {
       ...previous,
       category: r.routedCategory || r.ai?.category || '',
       priority: r.priority || r.ai?.priority || 'Medium',
-      trade: r.ai?.trade || '',
+      trade: standardTrade(r.ai?.trade),
       safety: r.safety || r.ai?.safetyFlag ? 'Yes' : 'No',
       title: `Inspect and service: ${(r.description || '').split('.')[0].slice(0, 60)}`,
       description: r.ai?.suggestedAction || r.description || '',
@@ -67,6 +70,7 @@ export default function ReviewWorkOrder() {
     const e = {};
     if (!form.title.trim()) e.title = 'Enter a work order title.';
     if (!form.description.trim()) e.description = 'Enter a work order description.';
+    if (!form.trade) e.trade = 'Pick a trade.';
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -123,7 +127,7 @@ export default function ReviewWorkOrder() {
               <div className="form-grid-2">
                 <Field label="Category" required><Select options={CATEGORIES} value={form.category} onChange={set('category')} /></Field>
                 <Field label="Priority" required><Select options={PRIORITY_NAMES} value={form.priority} onChange={set('priority')} /></Field>
-                <Field label="Trade" required><Select options={TRADES} value={form.trade} onChange={set('trade')} /></Field>
+                <Field label="Trade" required error={errors.trade}><Select placeholder="Select a trade" options={TRADES} value={form.trade} onChange={set('trade')} invalid={!!errors.trade} /></Field>
                 <Field label="Safety Flag" required><Select options={['No', 'Yes']} value={form.safety} onChange={set('safety')} /></Field>
               </div>
               <Field label="Work Order Title" required error={errors.title}><Input value={form.title} onChange={set('title')} invalid={!!errors.title} /></Field>

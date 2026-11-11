@@ -21,6 +21,7 @@ import ManagerDashboard from './pages/manager/Dashboard.jsx';
 import ManagerCalendar from './pages/manager/Calendar.jsx';
 import Triage from './pages/manager/Triage.jsx';
 import TechnicianCalendar from './pages/technician/Calendar.jsx';
+import Team from './pages/manager/Team.jsx';
 
 function HomeRedirect() {
   const { user, loading, authError } = useAuth();
@@ -74,7 +75,7 @@ export default function App() {
         <Route path="dashboard" element={<ManagerDashboard />} />
         <Route path="work-orders" element={<WorkOrders />} />
         <Route path="calendar" element={<ManagerCalendar />} />
-        <Route path="team" element={soon('Technicians / Team', 'Your technicians, their trades and current workload.')} />
+        <Route path="team" element={<Team />} />
         <Route path="reports" element={soon('Reports', 'Response and resolution metrics for your category.')} />
         <Route path="settings" element={soon('Settings', 'Profile and notification preferences.')} />
       </Route>

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import Icon from '../../components/Icon.jsx';
 import { Button, Card, EmptyState, Field, Pill, PriorityPill, Select, StatCard, StatusPill, Tabs, Textarea } from '../../components/ui.jsx';
 import { useAuth } from '../../context/AuthContext.jsx';
@@ -43,7 +44,14 @@ export default function MyTasks() {
   const [day, setDay] = useState(() => pickStartDay(mine));
   const [view, setView] = useState('Day');
   const [statusFilter, setStatusFilter] = useState('All Statuses');
-  const [selectedId, setSelectedId] = useState(null);
+  const [params] = useSearchParams();
+  const [selectedId, setSelectedId] = useState(() => params.get('wo'));
+
+  // Opened from the Calendar: jump to that job's day once work orders have loaded.
+  useEffect(() => {
+    const target = mine.find((w) => w.id === params.get('wo'));
+    if (target?.scheduledAt) setDay(toDate(target.scheduledAt));
+  }, [params.get('wo'), mine.length]);
   const [busy, setBusy] = useState('');
 
   const inRange = (w) => {

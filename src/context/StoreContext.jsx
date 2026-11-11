@@ -511,25 +511,38 @@ export function StoreProvider({ children }) {
       });
     },
 
-    scheduleWorkOrder(
-      id,
-      technicianId,
-      scheduledAt,
-      durationHours
-    ) {
+    // PB-06: schedule or reschedule an assigned work order.
+    scheduleWorkOrder(id, { serviceDate, startTime, durationHours, reason }) {
       return api('scheduleWorkOrder', {
         id,
-        technicianId,
-        scheduledAt,
-        durationHours
+        serviceDate,
+        startTime,
+        durationHours: Number(durationHours),
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        reason
       });
     },
 
-    addWorkNote(id, text) {
-      return api('addWorkNote', {
-        id,
-        text
-      });
+    listScheduleHistory(id) {
+      return api('listScheduleHistory', { id }).then((r) => r.entries || []);
+    },
+
+    assignTechnician(id, technicianId) {
+      return api('assignTechnician', { id, technicianId });
+    },
+
+    // PB-08: Assigned → In Progress → Completed.
+    updateWorkOrderStatus(id, status) {
+      return api('updateWorkOrderStatus', { id, status });
+    },
+
+    // PB-09: internal technician notes.
+    addWorkOrderNote(id, text, kind) {
+      return api('addWorkOrderNote', { id, text, kind });
+    },
+
+    listWorkOrderNotes(id) {
+      return api('listWorkOrderNotes', { id }).then((r) => r.notes || []);
     },
 
     // -----------------------------------------------------

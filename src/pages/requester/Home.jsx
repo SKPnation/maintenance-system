@@ -5,7 +5,7 @@ import { Button, Card, KebabButton, SafetyCard, StatusPill } from '../../compone
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useStore } from '../../context/StoreContext.jsx';
 import { EMERGENCY_PHONE } from '../../data/mock.js';
-import { fmtDate, fmtTime, greeting } from '../../data/format.js';
+import { byNewest, fmtDate, fmtTime, greeting, requestStatus, requestSubmittedAt } from '../../data/format.js';
 
 export default function RequesterHome() {
   const { user } = useAuth();
@@ -13,7 +13,7 @@ export default function RequesterHome() {
   const navigate = useNavigate();
   const mine = requests
     .filter((r) => r.requesterId === user.id)
-    .sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt))
+    .sort(byNewest)
     .slice(0, 5);
 
   return (
@@ -46,12 +46,13 @@ export default function RequesterHome() {
                   <tr><th>Request #</th><th>Description</th><th>Status</th><th>Date Submitted</th><th>Actions</th></tr>
                 </thead>
                 <tbody>
+                  {mine.length === 0 && <tr><td colSpan={5} className="muted">You haven’t submitted any requests yet.</td></tr>}
                   {mine.map((r) => (
                     <tr key={r.id}>
                       <td>{r.id}</td>
-                      <td>{r.description.length > 34 ? `${r.description.slice(0, 32)}…` : r.description}</td>
-                      <td><StatusPill status={r.status} /></td>
-                      <td><div>{fmtDate(r.submittedAt)}</div><div className="sub">{fmtTime(r.submittedAt)}</div></td>
+                      <td>{(r.description || '').length > 34 ? `${r.description.slice(0, 32)}…` : r.description}</td>
+                      <td><StatusPill status={requestStatus(r.status)} /></td>
+                      <td><div>{fmtDate(requestSubmittedAt(r))}</div><div className="sub">{fmtTime(requestSubmittedAt(r))}</div></td>
                       <td>
                         <div className="cell-actions">
                           <Button variant="ghost" size="sm" onClick={() => navigate(`/requester/requests/${r.id}`)}>View</Button>

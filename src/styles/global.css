@@ -667,3 +667,10 @@ h1, h2, h3 { font-weight: inherit; font-size: inherit; }
   .cal-day:first-child { border-top: none; }
   .cal-day-head { justify-content: flex-start; padding: 10px 14px; }
 }
+
+/* Account switcher */
+.menu-label { padding: 8px 10px 4px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; color: var(--muted); }
+.menu-account { align-items: center; gap: 10px; }
+.menu-account > span:last-child { display: flex; flex-direction: column; min-width: 0; text-align: left; }
+.menu-account-name { font-weight: 600; color: var(--text); }
+.menu-account .menu-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 210px; }

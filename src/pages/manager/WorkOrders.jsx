@@ -1,63 +1,98 @@
 import { useMemo, useState } from 'react';
-import { api } from '../../firebase.js';
+import { Button, Card, EmptyState, Modal, PageHeader, PriorityPill, Select, StatusPill } from '../../components/ui.jsx';
+import { ScheduleForm, ScheduleHistory } from '../../components/Scheduling.jsx';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useStore } from '../../context/StoreContext.jsx';
+import { useToast } from '../../context/ToastContext.jsx';
+import { fmtServiceWindow, localDateKey } from '../../data/format.js';
 
-const asDate = v => v?.toDate?.() || (v?.seconds ? new Date(v.seconds * 1000) : v ? new Date(v) : null);
-const dateInput = v => { const d = asDate(v); if (!d || Number.isNaN(d.getTime())) return ''; const local = new Date(d.getTime() - d.getTimezoneOffset()*60000); return local.toISOString().slice(0,16); };
+const CLOSED = ['Completed', 'Cancelled'];
+
 export default function WorkOrders() {
   const { user } = useAuth();
-  const { workOrders = [], technicians = [], scheduleWorkOrder } = useStore();
-  const [error,setError] = useState('');
-  const [saving,setSaving] = useState('');
-  const [filters,setFilters] = useState({priority:'',status:'',technician:'',date:''});
-  const [schedule,setSchedule] = useState({});
+  const { workOrders = [], technicians = [], assignTechnician } = useStore();
+  const toast = useToast();
+  const [saving, setSaving] = useState('');
+  const [filters, setFilters] = useState({ priority: '', status: '', technician: '', date: '' });
+  const [scheduling, setScheduling] = useState(null);
   const category = user?.category;
-  const myOrders = useMemo(() => workOrders.filter(w => category && w.category === category), [workOrders,category]);
-  const filtered = myOrders.filter(w =>
+
+  const myOrders = useMemo(() => workOrders.filter((w) => category && w.category === category), [workOrders, category]);
+  const filtered = myOrders.filter((w) =>
     (!filters.priority || w.priority === filters.priority) &&
     (!filters.status || w.status === filters.status) &&
     (!filters.technician || w.technicianId === filters.technician) &&
-    (!filters.date || dateInput(w.scheduledAt).slice(0,10) === filters.date)
+    (!filters.date || localDateKey(w.scheduledAt) === filters.date));
+  const techName = (id) => technicians.find((t) => t.id === id)?.name || '';
+  const options = (key) => [...new Set(myOrders.map((w) => (key === 'technician' ? w.technicianId : w[key])).filter(Boolean))]
+    .map((v) => ({ value: v, label: key === 'technician' ? techName(v) || v : v }));
+  const selected = workOrders.find((w) => w.id === scheduling);
+
+  async function assign(w, technicianId) {
+    setSaving(w.id);
+    try {
+      await assignTechnician(w.id, technicianId);
+      toast(technicianId ? `Assigned to ${techName(technicianId)}` : 'Technician removed');
+    } catch (e) { toast(e.message, 'error'); } finally { setSaving(''); }
+  }
+
+  return (
+    <div className="page-inner">
+      <PageHeader
+        title={`${category || 'Manager'} Work Orders`}
+        subtitle="Assign technicians and schedule approved work. Requests awaiting review appear in My Queue."
+        actions={<Button variant="secondary" icon="calendar" to="/manager/calendar">Open Calendar</Button>}
+      />
+      <Card>
+        <div className="row gap-12 wrap" style={{ marginBottom: 16 }}>
+          {['priority', 'status', 'technician'].map((k) => (
+            <Select key={k} className="input-sm" style={{ width: 180 }} aria-label={`Filter by ${k}`} placeholder={`All ${k === 'status' ? 'statuses' : k === 'priority' ? 'priorities' : 'technicians'}`} options={options(k)} value={filters[k]} onChange={(e) => setFilters({ ...filters, [k]: e.target.value })} />
+          ))}
+          <div className="input input-sm" style={{ width: 180 }}><input type="date" aria-label="Scheduled date" value={filters.date} onChange={(e) => setFilters({ ...filters, date: e.target.value })} /></div>
+        </div>
+        {filtered.length === 0 ? (
+          <EmptyState icon="fileText" title="No work orders" text={myOrders.length ? 'No work orders match these filters.' : `No work orders created for ${category || 'your category'} yet.`} />
+        ) : (
+          <div className="table-wrap">
+            <table className="table">
+              <thead><tr><th>Work order</th><th>Priority</th><th>Status</th><th>Technician</th><th>Service time</th><th /></tr></thead>
+              <tbody>
+                {filtered.map((w) => {
+                  const closed = CLOSED.includes(w.status);
+                  return (
+                    <tr key={w.id}>
+                      <td style={{ maxWidth: 300 }}><div style={{ fontWeight: 600 }}>{w.title || 'Maintenance work order'}</div><div className="sub">{w.location}</div></td>
+                      <td><PriorityPill priority={w.priority} size="sm" /></td>
+                      <td><StatusPill status={w.status} size="sm" /></td>
+                      <td>
+                        <Select className="input-sm" style={{ width: 200 }} aria-label={`Technician for ${w.title}`} disabled={saving === w.id || closed} placeholder="Unassigned" options={technicians.map((t) => ({ value: t.id, label: `${t.name} (${t.trade || 'Technician'})` }))} value={w.technicianId || ''} onChange={(e) => assign(w, e.target.value)} />
+                      </td>
+                      <td>{w.scheduledAt ? fmtServiceWindow(w.scheduledAt, w.durationHours) : <span className="muted">Not scheduled</span>}</td>
+                      <td>
+                        <Button size="sm" variant={w.scheduledAt ? 'secondary' : 'primary'} disabled={closed || !w.technicianId} title={!w.technicianId ? 'Assign a technician first' : undefined} onClick={() => setScheduling(w.id)}>
+                          {w.scheduledAt ? 'Reschedule' : 'Schedule'}
+                        </Button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      {selected && (
+        <Modal title={`${selected.scheduledAt ? 'Reschedule' : 'Schedule'}: ${selected.title}`} onClose={() => setScheduling(null)}>
+          <ScheduleForm workOrder={selected} technicianName={techName(selected.technicianId)} onSaved={() => setScheduling(null)} onCancel={() => setScheduling(null)} />
+          {selected.scheduledAt && (
+            <div>
+              <div className="section-title" style={{ fontSize: 14, marginBottom: 8 }}>Schedule history</div>
+              <ScheduleHistory workOrderId={selected.id} refreshKey={selected.scheduledAt} />
+            </div>
+          )}
+        </Modal>
+      )}
+    </div>
   );
-  const myTechnicians = technicians.filter(t => !t.category || t.category === category);
-  async function assign(id, technicianId) {
-    setSaving(id); setError('');
-    try { await api('assignTechnician',{id,technicianId}); }
-    catch(e) { setError(e.message); }
-    finally { setSaving(''); }
-  }
-  async function saveSchedule(w) {
-    const x = schedule[w.id] || {};
-    setSaving(w.id); setError('');
-    try { await scheduleWorkOrder(w.id, x.technicianId || w.technicianId, x.scheduledAt, Number(x.durationHours ?? w.durationHours ?? 1)); }
-    catch(e) { setError(e.message); }
-    finally { setSaving(''); }
-  }
-  return <div className="page-inner">
-    <h1 className="page-title">{category || 'Manager'} Work Orders</h1>
-    <p className="page-subtitle">Work orders approved and created for your category. Requests awaiting review appear in My Queue.</p>
-    {error && <p role="alert" style={{color:'red'}}>{error}</p>}
-    <div style={{display:'flex',gap:10,flexWrap:'wrap',marginTop:16}}>
-      {['priority','status','technician'].map(k => <select key={k} aria-label={k} value={filters[k]} onChange={e => setFilters({...filters,[k]:e.target.value})}>
-        <option value="">All {k}</option>
-        {[...new Set(myOrders.map(w => k === 'technician' ? w.technicianId : w[k]).filter(Boolean))].map(v => <option key={v} value={v}>{k === 'technician' ? (technicians.find(t=>t.id===v)?.name || v) : v}</option>)}
-      </select>)}
-      <input aria-label="Scheduled date" type="date" value={filters.date} onChange={e=>setFilters({...filters,date:e.target.value})}/>
-    </div>
-    <div className="card" style={{padding:22,marginTop:20,overflowX:'auto'}}>
-      <table style={{width:'100%',textAlign:'left',borderSpacing:'0 15px'}}>
-        <thead><tr><th>Work order</th><th>Title</th><th>Status</th><th>Assigned technician</th><th>Schedule / reschedule</th></tr></thead>
-        <tbody>{filtered.map(w => <tr key={w.id}>
-          <td>{w.id}</td><td>{w.title || w.description || 'Maintenance work order'}</td><td>{w.status}</td>
-          <td><select disabled={saving===w.id} value={w.technicianId || ''} onChange={e=>assign(w.id,e.target.value)}><option value="">Unassigned</option>{myTechnicians.map(t=><option key={t.id} value={t.id}>{t.name} ({t.trade || 'Technician'})</option>)}</select></td>
-          <td><input type="datetime-local" aria-label="Service start" value={schedule[w.id]?.scheduledAt ?? dateInput(w.scheduledAt)} onChange={e=>setSchedule({...schedule,[w.id]:{...schedule[w.id],scheduledAt:e.target.value}})}/>
-          <input type="number" min="0.25" step="0.25" style={{width:65}} aria-label="Duration hours" value={schedule[w.id]?.durationHours ?? w.durationHours ?? 1} onChange={e=>setSchedule({...schedule,[w.id]:{...schedule[w.id],durationHours:e.target.value}})}/>
-          <select aria-label="Schedule technician" value={schedule[w.id]?.technicianId ?? w.technicianId ?? ''} onChange={e=>setSchedule({...schedule,[w.id]:{...schedule[w.id],technicianId:e.target.value}})}><option value="">Select</option>{myTechnicians.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select>
-          <button disabled={saving===w.id} onClick={()=>saveSchedule(w)}>Save</button></td>
-        </tr>)}</tbody>
-      </table>
-      {!filtered.length && <p>{myOrders.length ? 'No work orders match these filters.' : `No work orders created for ${category || 'your category'} yet.`}</p>}
-    </div>
-  </div>;
 }

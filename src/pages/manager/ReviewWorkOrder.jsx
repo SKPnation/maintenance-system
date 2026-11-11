@@ -24,7 +24,6 @@ export default function ReviewWorkOrder() {
   const navigate = useNavigate();
   const r = requests.find((x) => x.id === id);
 
-  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
   const [form, setForm] = useState(() => ({
     category: r?.ai?.category || '',
     priority: r?.priority || 'Medium',
@@ -33,10 +32,7 @@ export default function ReviewWorkOrder() {
     title: r ? `Inspect and service: ${r.description.split('.')[0].slice(0, 60)}` : '',
     description: r?.ai?.suggestedAction || '',
     notes: '',
-    technicianId: technicians.find((t) => t.trade === r?.ai?.trade)?.id || technicians[0]?.id || '',
-    date: tomorrow,
-    time: '09:00',
-    duration: '2',
+    technicianId: technicians.find((t) => t.trade === r?.ai?.trade)?.id || '',
   }));
   // Requests and technicians may arrive after this component first renders.
   useEffect(() => {
@@ -70,8 +66,6 @@ export default function ReviewWorkOrder() {
     const e = {};
     if (!form.title.trim()) e.title = 'Enter a work order title.';
     if (!form.description.trim()) e.description = 'Enter a work order description.';
-    if (!form.date) e.date = 'Pick a date.';
-    if (!form.time) e.time = 'Pick a time.';
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -86,11 +80,9 @@ export default function ReviewWorkOrder() {
       priority: form.priority,
       safety: form.safety === 'Yes',
       technicianId: form.technicianId,
-      scheduledAt: `${form.date}T${form.time}:00`,
-      durationHours: Number(form.duration),
       notes: form.notes.trim(),
     });
-    toast(`${woId || 'Work order'} created. Assign a technician from Work Orders.`);
+    toast(form.technicianId ? 'Work order created. Schedule it from the Calendar.' : 'Work order created. Assign a technician from Work Orders.');
     navigate('/manager/work-orders'); }catch(err){toast(err.message,'error');}
   };
 
@@ -139,27 +131,19 @@ export default function ReviewWorkOrder() {
             </fieldset>
           </Card>
 
-          <Card title="Assignment & Schedule" icon="user">
+          <Card title="Assignment" icon="user">
             <fieldset disabled={locked} style={{ border: 'none' }} className="form-grid-2">
-              <Field label="Assign Technician" required>
+              <Field label="Assign Technician" hint="Optional. You can assign or change this later.">
                 <div className="input select tech-select">
                   {tech ? <Avatar initials={tech.initials || tech.name?.slice(0, 2) || 'T'} size={32} /> : null}
                   <select value={form.technicianId} onChange={set('technicianId')} aria-label="Technician">
-                    {technicians.map((t) => <option key={t.id} value={t.id}>{t.name} ({t.trade})</option>)}
+                    <option value="">Assign later</option>
+                    {technicians.filter((t) => !form.trade || t.trade === form.trade).map((t) => <option key={t.id} value={t.id}>{t.name} ({t.trade})</option>)}
                   </select>
                   <Icon name="chevronDown" size={16} strokeWidth={2.4} className="select-caret" />
                 </div>
               </Field>
-              <div className="stack gap-8">
-                <div className="form-grid-2" style={{ gap: 12 }}>
-                  <Field label="Scheduled Date" required error={errors.date}><Input icon="calendar" type="date" value={form.date} onChange={set('date')} /></Field>
-                  <Field label="Scheduled Time" required error={errors.time}><Input icon="clock" type="time" value={form.time} onChange={set('time')} /></Field>
-                </div>
-                <div className="row gap-16">
-                  <span className="field-label" style={{ fontSize: 14 }}>Estimated Duration</span>
-                  <Select className="input-sm" style={{ width: 130 }} options={['1', '2', '3', '4', '6', '8'].map((h) => ({ value: h, label: `${h} hour${h === '1' ? '' : 's'}` }))} value={form.duration} onChange={set('duration')} />
-                </div>
-              </div>
+              <div className="info-card" style={{ alignSelf: 'end' }}><Icon name="calendar" size={22} /><div style={{ fontSize: 14 }}>Service date and time are set from the Calendar after approval, where technician conflicts are checked.</div></div>
             </fieldset>
           </Card>
 

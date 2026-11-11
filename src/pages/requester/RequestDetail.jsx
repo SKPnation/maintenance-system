@@ -10,6 +10,7 @@ import {
   Card,
   EmptyState,
   PageHeader,
+  PriorityPill,
   StatusPill,
 } from '../../components/ui.jsx';
 
@@ -17,7 +18,7 @@ import { useStore } from '../../context/StoreContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { db, configured } from '../../firebase.js';
 import { EMERGENCY_PHONE } from '../../data/mock.js';
-import { fmtDateTime } from '../../data/format.js';
+import { fmtDateTime, fmtHours, fmtServiceWindow } from '../../data/format.js';
 import { REQUEST_STAGE } from '../../components/RequestBlocks.jsx';
 
 // Convert Firestore timestamps and date strings into Date objects.
@@ -79,6 +80,16 @@ function normalizeStatus(status) {
 
   return statuses[String(status).toLowerCase()] || status;
 }
+
+// Requester-facing history: internal technician/manager notes never appear here.
+const HISTORY_LABEL = {
+  submitted: () => 'Request submitted',
+  approved: () => 'Approved — work order created',
+  rejected: () => 'Request rejected',
+  scheduled: (h) => `Service scheduled for ${fmtServiceWindow(h.scheduledAt, h.durationHours)}`,
+  rescheduled: (h) => `Service rescheduled to ${fmtServiceWindow(h.scheduledAt, h.durationHours)}`,
+  work_status: (h) => (h.status === 'Completed' ? 'Work completed' : h.status === 'In Progress' ? 'Technician started work' : `Work status: ${h.status}`),
+};
 
 export default function RequestDetail() {
   const { id } = useParams();
@@ -265,6 +276,14 @@ export default function RequestDetail() {
     Boolean(req.workOrderId) ||
     ['Scheduled', 'In Progress', 'Completed'].includes(status);
 
+  const workStatus = req.workOrderStatus || (workOrderCreated ? 'Assigned' : '');
+  const serviceScheduled = Boolean(req.serviceScheduledAt);
+  const workCompleted = workStatus === 'Completed';
+  const assignedCategory = req.assignedCategory || (routingCompleted || req.workOrderId ? routedCategory : '');
+  const history = (Array.isArray(req.history) && req.history.length ? req.history : [{ type: 'submitted', at: req.submittedAt || req.createdAt }])
+    .filter((h) => HISTORY_LABEL[h.type])
+    .map((h, i) => ({ key: `${h.type}-${h.at}-${i}`, label: HISTORY_LABEL[h.type](h), at: h.type === 'submitted' ? (h.at || req.submittedAt || req.createdAt) : h.at }));
+
   const submittedDate = formatRequestDate(
     req.submittedAt || req.createdAt
   );
@@ -341,6 +360,18 @@ export default function RequestDetail() {
       meta: workOrderMeta,
       text: 'You’ll be notified once it’s approved and assigned.',
       completed: workOrderCreated,
+    },
+    {
+      title: 'Service Scheduled',
+      meta: serviceScheduled ? fmtServiceWindow(req.serviceScheduledAt, req.serviceDurationHours) : 'No service time set yet',
+      text: 'A technician visit is booked for this time.',
+      completed: serviceScheduled,
+    },
+    {
+      title: 'Work Completed',
+      meta: workCompleted ? formatRequestDate(req.workOrderStatusUpdatedAt) : workStatus || 'Pending',
+      text: 'The technician has finished the repair.',
+      completed: workCompleted,
     },
   ];
 
@@ -505,6 +536,12 @@ export default function RequestDetail() {
                 <dt>Status</dt>
                 <dd><StatusPill status={status} /></dd>
 
+                <dt>Priority</dt>
+                <dd>{req.priority ? <PriorityPill priority={req.priority} /> : 'Not set yet'}</dd>
+
+                <dt>Assigned category</dt>
+                <dd>{assignedCategory || 'Not assigned yet'}</dd>
+
                 <dt>Submitted</dt>
                 <dd>{submittedDate}</dd>
 
@@ -565,6 +602,45 @@ export default function RequestDetail() {
           </Card>
 
           {!rejected && (
+            <Card title="Service & Progress" icon="calendar">
+              <dl className="kv" style={{ maxWidth: 580 }}>
+                <dt>Work order</dt>
+                <dd>{workOrderCreated ? <StatusPill status={workStatus} /> : 'Not created yet'}</dd>
+
+                {workOrderCreated && (
+                  <>
+                    <dt>Last progress update</dt>
+                    <dd>{formatRequestDate(req.workOrderStatusUpdatedAt)}</dd>
+                  </>
+                )}
+
+                <dt>Scheduled service</dt>
+                <dd>
+                  {serviceScheduled ? (
+                    <>
+                      <strong>{fmtServiceWindow(req.serviceScheduledAt, req.serviceDurationHours)}</strong>
+                      <div className="muted" style={{ fontSize: 13.5 }}>Estimated duration: {fmtHours(req.serviceDurationHours)}</div>
+                    </>
+                  ) : (
+                    <span className="unscheduled-note">No service time has been scheduled yet.</span>
+                  )}
+                </dd>
+              </dl>
+            </Card>
+          )}
+
+          <Card title="Request History" icon="history">
+            <div className="stack gap-8">
+              {[...history].reverse().map((h) => (
+                <div key={h.key} className="note-item">
+                  <div className="tl-meta">{formatRequestDate(h.at)}</div>
+                  {h.label}
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          {!rejected && !workOrderCreated && (
             <section className="next-strip">
               <h2 className="card-title">What happens next?</h2>
 

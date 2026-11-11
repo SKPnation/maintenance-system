@@ -10,6 +10,7 @@ const {initializeApp} = require("firebase-admin/app");
 const {getAuth} = require("firebase-admin/auth");
 const {getFirestore, FieldValue} = require("firebase-admin/firestore");
 const OpenAI = require("openai");
+const workflow = require("./workflow");
 
 initializeApp();
 
@@ -78,35 +79,6 @@ function validateBoolean(value, field) {
   return value;
 }
 
-function validateSchedule(value, required = false) {
-  const text = required ?
-        nonemptyString(value, "scheduled date", 50) :
-        optionalString(value, "scheduled date", 50);
-
-  if (text && Number.isNaN(Date.parse(text))) {
-    throw new HttpsError("invalid-argument", "Invalid scheduled date.");
-  }
-
-  return text;
-}
-
-function validateDuration(value) {
-  const duration = Number(value);
-
-  if (
-    !Number.isFinite(duration) ||
-        duration <= 0 ||
-        duration > 24
-  ) {
-    throw new HttpsError(
-        "invalid-argument",
-        "Duration must be greater than zero and no more than 24 hours.",
-    );
-  }
-
-  return duration;
-}
-
 // ============================================================
 // AUTHORIZATION
 // ============================================================
@@ -156,6 +128,49 @@ async function requireManager(request) {
   }
 
   return user;
+}
+
+async function requireTechnician(request) {
+  const user = await getActiveUser(request);
+
+  if (user.role !== "technician") {
+    throw new HttpsError(
+        "permission-denied",
+        "An active technician account is required.",
+    );
+  }
+
+  return user;
+}
+
+// Managers see work orders in their category; technicians see only their own.
+function ensureWorkOrderAccess(user, workOrder) {
+  const allowed =
+    (user.role === "manager" && user.category && workOrder.category === user.category) ||
+    (user.role === "technician" && workOrder.technicianId === user.uid);
+
+  if (!allowed) {
+    throw new HttpsError(
+        "permission-denied",
+        "You do not have access to this work order.",
+    );
+  }
+}
+
+function toIso(value) {
+  if (!value) return null;
+  if (typeof value.toDate === "function") return value.toDate().toISOString();
+  if (value instanceof Date) return value.toISOString();
+  return typeof value === "string" ? value : null;
+}
+
+// Requester-visible history entry stored on the original request.
+function requestHistory(type, details = {}) {
+  return FieldValue.arrayUnion({
+    type,
+    at: new Date().toISOString(),
+    ...details,
+  });
 }
 
 function ensureManagerCategory(record, manager) {
@@ -608,6 +623,7 @@ async function submitRequest(payload, request) {
     requesterName: user.name || "",
     status: "submitted",
     analysisStatus: "pending",
+    history: [{type: "submitted", at: new Date().toISOString()}],
     createdAt: FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
   });
@@ -742,6 +758,7 @@ async function rejectManagerRequest(payload, request) {
     transaction.update(ref, {
       status: "Rejected",
       managerNote: note,
+      history: requestHistory("rejected"),
       reviewedBy: manager.uid,
       reviewedAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
@@ -802,10 +819,7 @@ async function approveManagerRequest(payload, request) {
       128,
   );
 
-  const scheduledAt = validateSchedule(input.scheduledAt);
-
-  const durationHours = validateDuration(input.durationHours);
-
+  // Scheduling is a separate, conflict-checked step (PB-06).
   const notes = optionalString(input.notes, "notes", 2000);
 
   const requestRef = db.collection("requests").doc(requestId);
@@ -858,10 +872,12 @@ async function approveManagerRequest(payload, request) {
       requesterName: original.requesterName || "",
 
       technicianId,
-      scheduledAt,
-      durationHours,
+      scheduledAt: null,
+      scheduledEnd: null,
+      durationHours: null,
 
       status: technicianId ? "Assigned" : "Unassigned",
+      statusUpdatedAt: now,
 
       notes: notes ?
                 [{
@@ -883,6 +899,10 @@ async function approveManagerRequest(payload, request) {
     transaction.update(requestRef, {
       status: "Approved",
       workOrderId: workOrderRef.id,
+      workOrderStatus: technicianId ? "Assigned" : "Unassigned",
+      workOrderStatusUpdatedAt: now,
+      assignedCategory: manager.category,
+      history: requestHistory("approved"),
 
       priority,
       safety,
@@ -902,52 +922,262 @@ async function approveManagerRequest(payload, request) {
 }
 
 // ============================================================
-// MANAGER: ASSIGN TECHNICIAN / SCHEDULE WORK ORDER
+// MANAGER: ASSIGN / REASSIGN TECHNICIAN
 // ============================================================
 
-async function managerWorkOrderAction(action, payload, request) {
+async function assignTechnician(payload, request) {
   const manager = await requireManager(request);
 
-  const id = nonemptyString(
-      payload.id,
-      "work order ID",
-      128,
-  );
-
-  const technicianId = action === "assignTechnician" ?
-        optionalString(payload.technicianId, "technician ID", 128) :
-        nonemptyString(payload.technicianId, "technician ID", 128);
+  const id = nonemptyString(payload.id, "work order ID", 128);
+  const technicianId = optionalString(payload.technicianId, "technician ID", 128);
 
   const ref = db.collection("workOrders").doc(id);
-
-  const technicianRef = technicianId ?
-        db.collection("users").doc(technicianId) :
-        null;
-
-  const updates = {
-    technicianId,
-    updatedAt: FieldValue.serverTimestamp(),
-  };
-
-  if (action === "scheduleWorkOrder") {
-    updates.scheduledAt = validateSchedule(
-        payload.scheduledAt,
-        true,
-    );
-
-    updates.durationHours = validateDuration(
-        payload.durationHours,
-    );
-
-    updates.status = "Assigned";
-  }
+  const technicianRef = technicianId ? db.collection("users").doc(technicianId) : null;
 
   await db.runTransaction(async (transaction) => {
     const snapshot = await transaction.get(ref);
 
-    const technicianSnapshot = technicianRef ?
-            await transaction.get(technicianRef) :
-            null;
+    if (!snapshot.exists) {
+      throw new HttpsError("not-found", "Work order not found.");
+    }
+
+    const workOrder = {id, ...snapshot.data()};
+
+    if (workOrder.category !== manager.category) {
+      throw new HttpsError("permission-denied", "This work order belongs to another category.");
+    }
+
+    if (workflow.CLOSED_STATUSES.includes(workOrder.status)) {
+      throw new HttpsError("failed-precondition", "This work order is closed.");
+    }
+
+    const technicianSnapshot = technicianRef ? await transaction.get(technicianRef) : null;
+
+    if (technicianRef) {
+      validateTechnician(technicianSnapshot, workOrder.trade);
+    }
+
+    // A scheduled job keeps its time, so the new technician must be free then.
+    if (technicianId && technicianId !== workOrder.technicianId && workOrder.scheduledAt) {
+      const others = await transaction.get(
+          db.collection("workOrders").where("technicianId", "==", technicianId),
+      );
+      const conflict = workflow.findScheduleConflict(
+          others.docs.map((doc) => ({id: doc.id, ...doc.data()})),
+          {
+            technicianId,
+            startMs: Date.parse(workOrder.scheduledAt),
+            endMs: Date.parse(workOrder.scheduledEnd) ||
+              Date.parse(workOrder.scheduledAt) + Number(workOrder.durationHours) * 3600000,
+            excludeId: id,
+          },
+      );
+
+      if (conflict) {
+        throw new HttpsError(
+            "failed-precondition",
+            `That technician already has work scheduled ${workflow.describeWindow(conflict.start, conflict.end, workOrder.timeZone)}.`,
+        );
+      }
+    }
+
+    const requestRef = workOrder.requestId ? db.collection("requests").doc(workOrder.requestId) : null;
+    const requestSnapshot = requestRef ? await transaction.get(requestRef) : null;
+
+    const status = technicianId ? "Assigned" : "Unassigned";
+    const now = FieldValue.serverTimestamp();
+
+    transaction.update(ref, {
+      technicianId,
+      status,
+      statusUpdatedAt: now,
+      updatedAt: now,
+    });
+
+    if (requestSnapshot && requestSnapshot.exists) {
+      transaction.update(requestRef, {
+        workOrderStatus: status,
+        workOrderStatusUpdatedAt: now,
+        updatedAt: now,
+      });
+    }
+  });
+
+  return {success: true, id};
+}
+
+// ============================================================
+// MANAGER: SCHEDULE / RESCHEDULE WORK ORDER (PB-06)
+// ============================================================
+
+async function scheduleWorkOrder(payload, request) {
+  const manager = await requireManager(request);
+
+  const id = nonemptyString(payload.id, "work order ID", 128);
+  const schedule = workflow.parseSchedule(payload);
+  const reason = optionalString(payload.reason, "reschedule reason", 500);
+
+  const ref = db.collection("workOrders").doc(id);
+  const historyRef = ref.collection("scheduleHistory").doc();
+
+  const result = await db.runTransaction(async (transaction) => {
+    // Reads first: work order, technician, technician's other jobs, request.
+    const snapshot = await transaction.get(ref);
+
+    if (!snapshot.exists) {
+      throw new HttpsError("not-found", "Work order not found.");
+    }
+
+    const workOrder = {id, ...snapshot.data()};
+
+    if (workOrder.category !== manager.category) {
+      throw new HttpsError("permission-denied", "This work order belongs to another category.");
+    }
+
+    if (workflow.CLOSED_STATUSES.includes(workOrder.status)) {
+      throw new HttpsError("failed-precondition", "Closed work orders cannot be scheduled.");
+    }
+
+    if (!workOrder.technicianId) {
+      throw new HttpsError("failed-precondition", "Assign a technician before scheduling this work order.");
+    }
+
+    const technicianSnapshot = await transaction.get(
+        db.collection("users").doc(workOrder.technicianId),
+    );
+
+    if (
+      !technicianSnapshot.exists ||
+      technicianSnapshot.get("active") !== true ||
+      technicianSnapshot.get("role") !== "technician"
+    ) {
+      throw new HttpsError("failed-precondition", "The assigned technician is no longer active. Reassign the work order first.");
+    }
+
+    const others = await transaction.get(
+        db.collection("workOrders").where("technicianId", "==", workOrder.technicianId),
+    );
+
+    const conflict = workflow.findScheduleConflict(
+        others.docs.map((doc) => ({id: doc.id, ...doc.data()})),
+        {
+          technicianId: workOrder.technicianId,
+          startMs: schedule.startMs,
+          endMs: schedule.endMs,
+          excludeId: id,
+        },
+    );
+
+    if (conflict) {
+      throw new HttpsError(
+          "failed-precondition",
+          `${technicianSnapshot.get("name") || "The technician"} already has work scheduled ${workflow.describeWindow(conflict.start, conflict.end, schedule.timeZone)}. Pick a time that does not overlap.`,
+      );
+    }
+
+    if (workflow.sameSchedule(workOrder, schedule)) {
+      return {unchanged: true};
+    }
+
+    const requestRef = workOrder.requestId ? db.collection("requests").doc(workOrder.requestId) : null;
+    const requestSnapshot = requestRef ? await transaction.get(requestRef) : null;
+
+    const previous = workflow.scheduleSnapshot(workOrder);
+    const next = workflow.scheduleSnapshot(schedule);
+    const action = previous ? "rescheduled" : "scheduled";
+    const now = FieldValue.serverTimestamp();
+
+    transaction.update(ref, {
+      serviceDate: schedule.serviceDate,
+      startTime: schedule.startTime,
+      timeZone: schedule.timeZone,
+      durationHours: schedule.durationHours,
+      scheduledAt: schedule.scheduledAt,
+      scheduledEnd: schedule.scheduledEnd,
+      scheduledBy: manager.uid,
+      scheduleUpdatedAt: now,
+      updatedAt: now,
+    });
+
+    transaction.create(historyRef, {
+      action,
+      previous,
+      next,
+      technicianId: workOrder.technicianId,
+      reason,
+      changedBy: manager.uid,
+      changedByName: manager.name || "",
+      changedAt: now,
+    });
+
+    if (requestSnapshot && requestSnapshot.exists) {
+      transaction.update(requestRef, {
+        serviceScheduledAt: schedule.scheduledAt,
+        serviceDurationHours: schedule.durationHours,
+        serviceTimeZone: schedule.timeZone,
+        history: requestHistory(action, {
+          scheduledAt: schedule.scheduledAt,
+          durationHours: schedule.durationHours,
+        }),
+        updatedAt: now,
+      });
+    }
+
+    return {unchanged: false, action};
+  });
+
+  return {
+    success: true,
+    id,
+    ...result,
+    scheduledAt: schedule.scheduledAt,
+    durationHours: schedule.durationHours,
+  };
+}
+
+async function listScheduleHistory(payload, request) {
+  const user = await getActiveUser(request);
+  const id = nonemptyString(payload.id, "work order ID", 128);
+  const ref = db.collection("workOrders").doc(id);
+  const snapshot = await ref.get();
+
+  if (!snapshot.exists) {
+    throw new HttpsError("not-found", "Work order not found.");
+  }
+
+  ensureWorkOrderAccess(user, snapshot.data());
+
+  const history = await ref.collection("scheduleHistory").orderBy("changedAt", "asc").get();
+
+  return {
+    entries: history.docs.map((doc) => {
+      const data = doc.data();
+
+      return {
+        id: doc.id,
+        action: data.action,
+        previous: data.previous || null,
+        next: data.next || null,
+        reason: data.reason || "",
+        changedByName: data.changedByName || "",
+        changedAt: toIso(data.changedAt),
+      };
+    }),
+  };
+}
+
+// ============================================================
+// TECHNICIAN: UPDATE WORK-ORDER STATUS (PB-08)
+// ============================================================
+
+async function updateWorkOrderStatus(payload, request) {
+  const technician = await requireTechnician(request);
+
+  const id = nonemptyString(payload.id, "work order ID", 128);
+  const ref = db.collection("workOrders").doc(id);
+
+  const status = await db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(ref);
 
     if (!snapshot.exists) {
       throw new HttpsError("not-found", "Work order not found.");
@@ -955,34 +1185,117 @@ async function managerWorkOrderAction(action, payload, request) {
 
     const workOrder = snapshot.data();
 
-    if (workOrder.category !== manager.category) {
-      throw new HttpsError(
-          "permission-denied",
-          "This work order belongs to another category.",
-      );
+    if (workOrder.technicianId !== technician.uid) {
+      throw new HttpsError("permission-denied", "This work order is not assigned to you.");
     }
 
-    if (["Completed", "Cancelled"].includes(workOrder.status)) {
-      throw new HttpsError(
-          "failed-precondition",
-          "This work order is closed.",
-      );
-    }
+    const next = workflow.validateStatusTransition(workOrder.status, payload.status);
 
-    if (technicianRef) {
-      validateTechnician(technicianSnapshot, workOrder.trade);
-    }
+    const requestRef = workOrder.requestId ? db.collection("requests").doc(workOrder.requestId) : null;
+    const requestSnapshot = requestRef ? await transaction.get(requestRef) : null;
 
-    if (action === "assignTechnician") {
-      updates.status = technicianId ? "Assigned" : "Unassigned";
-    }
+    const now = FieldValue.serverTimestamp();
+    const updates = {
+      status: next,
+      statusUpdatedAt: now,
+      statusUpdatedBy: technician.uid,
+      updatedAt: now,
+    };
+
+    if (next === "In Progress") updates.startedAt = now;
+    if (next === "Completed") updates.completedAt = now;
 
     transaction.update(ref, updates);
+
+    // Mirror progress onto the request; the request's own status stays separate.
+    if (requestSnapshot && requestSnapshot.exists) {
+      transaction.update(requestRef, {
+        workOrderStatus: next,
+        workOrderStatusUpdatedAt: now,
+        history: requestHistory("work_status", {status: next}),
+        updatedAt: now,
+      });
+    }
+
+    return next;
   });
 
+  return {success: true, id, status};
+}
+
+// ============================================================
+// TECHNICIAN: PROGRESS AND COMPLETION NOTES (PB-09)
+// ============================================================
+
+async function addWorkOrderNote(payload, request) {
+  const technician = await requireTechnician(request);
+
+  const id = nonemptyString(payload.id, "work order ID", 128);
+  const note = workflow.validateNote(payload.text, payload.kind);
+
+  const ref = db.collection("workOrders").doc(id);
+  const noteRef = ref.collection("notes").doc();
+
+  await db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(ref);
+
+    if (!snapshot.exists) {
+      throw new HttpsError("not-found", "Work order not found.");
+    }
+
+    if (snapshot.get("technicianId") !== technician.uid) {
+      throw new HttpsError("permission-denied", "This work order is not assigned to you.");
+    }
+
+    const now = FieldValue.serverTimestamp();
+
+    transaction.create(noteRef, {
+      text: note.text,
+      kind: note.kind,
+      authorId: technician.uid,
+      authorName: technician.name || "",
+      authorRole: "technician",
+      createdAt: now,
+    });
+
+    transaction.update(ref, {
+      noteCount: FieldValue.increment(1),
+      lastNoteAt: now,
+      updatedAt: now,
+    });
+  });
+
+  return {success: true, id: noteRef.id};
+}
+
+async function listWorkOrderNotes(payload, request) {
+  const user = await getActiveUser(request);
+  const id = nonemptyString(payload.id, "work order ID", 128);
+  const ref = db.collection("workOrders").doc(id);
+  const snapshot = await ref.get();
+
+  if (!snapshot.exists) {
+    throw new HttpsError("not-found", "Work order not found.");
+  }
+
+  // Internal notes: assigned technician and the category manager only.
+  ensureWorkOrderAccess(user, snapshot.data());
+
+  const notes = await ref.collection("notes").orderBy("createdAt", "asc").get();
+
   return {
-    success: true,
-    id,
+    notes: notes.docs.map((doc) => {
+      const data = doc.data();
+
+      return {
+        id: doc.id,
+        text: data.text,
+        kind: data.kind,
+        authorId: data.authorId,
+        authorName: data.authorName || "",
+        createdAt: toIso(data.createdAt),
+      };
+    }),
   };
 }
 
@@ -1049,12 +1362,23 @@ exports.maintenanceApi = onCall(
           return await approveManagerRequest(payload, request);
 
         case "assignTechnician":
+          return await assignTechnician(payload, request);
+
         case "scheduleWorkOrder":
-          return await managerWorkOrderAction(
-              action,
-              payload,
-              request,
-          );
+          return await scheduleWorkOrder(payload, request);
+
+        case "listScheduleHistory":
+          return await listScheduleHistory(payload, request);
+
+          // Technician actions
+        case "updateWorkOrderStatus":
+          return await updateWorkOrderStatus(payload, request);
+
+        case "addWorkOrderNote":
+          return await addWorkOrderNote(payload, request);
+
+        case "listWorkOrderNotes":
+          return await listWorkOrderNotes(payload, request);
 
         default:
           throw new HttpsError(

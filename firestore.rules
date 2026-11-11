@@ -1,15 +1,200 @@
 rules_version = '2';
+
 service cloud.firestore {
- match /databases/{database}/documents {
-  function signedIn(){return request.auth != null;}
-  function profile(){return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;}
-  function active(){return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && profile().active == true;}
-  function isRole(r){return active() && profile().role == r;}
-  match /users/{uid}{allow read: if active() && (request.auth.uid==uid || isRole('admin') || (isRole('manager') && resource.data.role=='technician'));allow write: if false;}
-  match /buildings/{id}{allow read: if active();allow write: if false;}
-  match /priorityLevels/{id}{allow read: if active();allow write: if false;}
-  match /requests/{id}{allow read: if active() && (isRole('admin') || (isRole('requester') && resource.data.requesterId==request.auth.uid) || (isRole('manager') && (profile().category==resource.data.routedCategory)));allow write: if false;}
-  match /workOrders/{id}{allow read: if active() && (isRole('admin') || (isRole('manager') && profile().category==resource.data.category) || (isRole('technician') && resource.data.technicianId==request.auth.uid));allow write: if false;}
-  match /{document=**}{allow read,write: if false;}
- }
+  match /databases/{database}/documents {
+
+    // -----------------------------------------
+    // AUTHENTICATION HELPERS
+    // -----------------------------------------
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userExists() {
+      return signedIn()
+        && exists(
+          /databases/$(database)/documents/users/$(request.auth.uid)
+        );
+    }
+
+    function currentUser() {
+      return get(
+        /databases/$(database)/documents/users/$(request.auth.uid)
+      ).data;
+    }
+
+    function isActiveUser() {
+      return userExists()
+        && currentUser().active == true;
+    }
+
+    function hasRole(role) {
+      return isActiveUser()
+        && currentUser().role == role;
+    }
+
+    function isAdmin() {
+      return hasRole('admin');
+    }
+
+    function isRequester() {
+      return hasRole('requester');
+    }
+
+    function isManager() {
+      return hasRole('manager');
+    }
+
+    function isTechnician() {
+      return hasRole('technician');
+    }
+
+    function managesCategory(category) {
+      return isManager()
+        && currentUser().category == category;
+    }
+
+    // -----------------------------------------
+    // USERS
+    // -----------------------------------------
+
+    match /users/{userId} {
+
+      // Active users can read their own profiles.
+      // Administrators can read all profiles.
+      // Managers can read technician profiles
+      // for work order assignment.
+
+      allow get: if isActiveUser()
+        && (
+          request.auth.uid == userId
+          || isAdmin()
+          || (
+            isManager()
+            && resource.data.role == 'technician'
+          )
+        );
+
+      allow list: if isAdmin()
+        || (
+          isManager()
+          && resource.data.role == 'technician'
+        );
+
+      // User management is handled by Cloud Functions.
+      allow create, update, delete: if false;
+    }
+
+    // -----------------------------------------
+    // BUILDINGS
+    // -----------------------------------------
+
+    match /buildings/{buildingId} {
+
+      // All active users can view buildings.
+      allow get, list: if isActiveUser();
+
+      // Only Cloud Functions manage buildings.
+      allow create, update, delete: if false;
+
+      // ---------------------------------------
+      // ROOMS
+      // ---------------------------------------
+
+      match /rooms/{roomId} {
+
+        // All active users can view rooms.
+        allow get, list: if isActiveUser();
+
+        // Only Cloud Functions manage rooms.
+        allow create, update, delete: if false;
+      }
+    }
+
+    // -----------------------------------------
+    // PRIORITY LEVELS
+    // -----------------------------------------
+
+    match /priorityLevels/{levelId} {
+
+      // All active users can view priority levels.
+      allow get, list: if isActiveUser();
+
+      // Only Cloud Functions manage priority levels.
+      allow create, update, delete: if false;
+    }
+
+    // -----------------------------------------
+    // MAINTENANCE REQUESTS
+    // -----------------------------------------
+
+    match /requests/{requestId} {
+
+      // Requesters can read their own requests.
+      // Managers can read requests in their category.
+      // Administrators can read all requests.
+
+      allow get, list: if isActiveUser()
+        && (
+          isAdmin()
+
+          || (
+            isRequester()
+            && resource.data.requesterId
+              == request.auth.uid
+          )
+
+          || (
+            isManager()
+            && resource.data.routedCategory
+              == currentUser().category
+          )
+        );
+
+      // Requests are created and updated
+      // through Cloud Functions only.
+      allow create, update, delete: if false;
+    }
+
+    // -----------------------------------------
+    // WORK ORDERS
+    // -----------------------------------------
+
+    match /workOrders/{workOrderId} {
+
+      // Administrators can read all work orders.
+      // Managers can read work orders in their category.
+      // Technicians can read assigned work orders.
+
+      allow get, list: if isActiveUser()
+        && (
+          isAdmin()
+
+          || (
+            isManager()
+            && resource.data.category
+              == currentUser().category
+          )
+
+          || (
+            isTechnician()
+            && resource.data.technicianId
+              == request.auth.uid
+          )
+        );
+
+      // Work order creation and updates
+      // go through Cloud Functions.
+      allow create, update, delete: if false;
+    }
+
+    // -----------------------------------------
+    // DEFAULT DENY
+    // -----------------------------------------
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
 }

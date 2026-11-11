@@ -209,7 +209,7 @@ function WorkOrderDetail({ wo, busy, onStatus }) {
             <dt>Location</dt><dd>{wo.location || 'Not set'}</dd>
             <dt>Service time</dt><dd>{wo.scheduledAt ? fmtServiceWindow(wo.scheduledAt, wo.durationHours) : <span className="muted">Not scheduled yet</span>}</dd>
             <dt>Est. duration</dt><dd>{fmtHours(wo.durationHours)}</dd>
-            <dt>Trade</dt><dd>{wo.trade || '—'}</dd>
+            <dt>Trade</dt><dd>{wo.trade || '-'}</dd>
             <dt>Status updated</dt><dd>{fmtDateTime(wo.statusUpdatedAt || wo.updatedAt)}</dd>
           </dl>
           <div>
@@ -292,7 +292,7 @@ function NotesPanel({ wo }) {
             <button key={k} type="button" className={kind === k ? 'on' : ''} aria-pressed={kind === k} onClick={() => setKind(k)} style={{ fontSize: 13.5 }}>{label}</button>
           ))}
         </div>
-        <Field htmlFor={`note-${wo.id}`} error={error} hint="Internal — visible to you and your category manager, not the requester.">
+        <Field htmlFor={`note-${wo.id}`} error={error} hint="Internal - visible to you and your category manager, not the requester.">
           <Textarea id={`note-${wo.id}`} rows={3} maxLength={2000} placeholder={kind === 'completion' ? 'What was repaired and the final result…' : 'Work performed so far…'} value={text} onChange={(e) => setText(e.target.value)} invalid={!!error} />
         </Field>
         <Button size="sm" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save Note'}</Button>

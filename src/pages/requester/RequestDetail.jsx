@@ -84,7 +84,7 @@ function normalizeStatus(status) {
 // Requester-facing history: internal technician/manager notes never appear here.
 const HISTORY_LABEL = {
   submitted: () => 'Request submitted',
-  approved: () => 'Approved — work order created',
+  approved: () => 'Approved - work order created',
   rejected: () => 'Request rejected',
   scheduled: (h) => `Service scheduled for ${fmtServiceWindow(h.scheduledAt, h.durationHours)}`,
   rescheduled: (h) => `Service rescheduled to ${fmtServiceWindow(h.scheduledAt, h.durationHours)}`,
@@ -298,7 +298,7 @@ export default function RequestDetail() {
   const analysisMeta = analysisCompleted
     ? 'Completed'
     : analysisFailed
-      ? 'Failed — Manual Review Required'
+      ? 'Failed - Manual Review Required'
       : analysisProcessing
         ? 'In progress'
         : 'Pending';

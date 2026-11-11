@@ -123,7 +123,7 @@ import { getMovieByIdRef } from '@dataconnect/generated';
 
 const queryRef = getMovieByIdRef({ id: "<MOVIE_ID>" });
 
-// Option 1: Observer object (recommended — uses `onErr`)
+// Option 1: Observer object (recommended - uses `onErr`)
 const unsubscribe = subscribe(queryRef, {
   onNext: (result) => console.log("Updated result:", result),
   onErr: (error) => console.error("Subscription error:", error)

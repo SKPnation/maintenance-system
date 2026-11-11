@@ -218,13 +218,13 @@ query MovieLeaderboard
 import { listMoviesRef, movieLeaderboardRef } from '@movie-app/dataconnect';
 import { subscribe } from 'firebase/data-connect';
 
-// Subscribe to movie list — refreshes when AddReview mutation runs
+// Subscribe to movie list - refreshes when AddReview mutation runs
 const unsubMovies = subscribe(listMoviesRef({ genre: 'Action' }), {
   onNext: (result) => updateMovieList(result.data.movies),
   onErr: (error) => console.error(error) // Observer object property is `onErr` (positional overload parameter is `onError`)
 });
 
-// Subscribe to leaderboard — refreshes every 30 seconds
+// Subscribe to leaderboard - refreshes every 30 seconds
 const unsubLeaderboard = subscribe(movieLeaderboardRef(), {
   onNext: (result) => updateLeaderboard(result.data.movies),
   onErr: (error) => console.error(error)

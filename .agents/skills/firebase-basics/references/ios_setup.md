@@ -147,7 +147,7 @@ secrets:
    - **In Code (Only with Secure / Gitignored Loading):** If setting the
      environment variable in code before initializing
      `AppCheckDebugProviderFactory`, load the token dynamically from a
-     gitignored local file or build configuration—never hardcode the raw token
+     gitignored local file or build configuration-never hardcode the raw token
      string:
 
      ```swift

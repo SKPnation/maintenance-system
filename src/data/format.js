@@ -13,7 +13,7 @@ export const toDate = (v) => {
   return Number.isNaN(d.getTime()) ? null : d;
 };
 
-export const fmtDate = (v) => { const d = toDate(v); if (!d) return '—'; return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`; };
+export const fmtDate = (v) => { const d = toDate(v); if (!d) return '-'; return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`; };
 export const fmtTime = (v) => {
   const d = toDate(v);
   if (!d) return '';
@@ -21,8 +21,8 @@ export const fmtTime = (v) => {
   const ap = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12;
   return `${String(h).padStart(2, '0')}:${m} ${ap}`;
 };
-export const fmtDateTime = (v) => (toDate(v) ? `${fmtDate(v)} at ${fmtTime(v)}` : '—');
-export const fmtLongDay = (v) => { const d = toDate(v); if (!d) return '—'; return `${DAYS[d.getDay()]}, ${LONG_MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`; };
+export const fmtDateTime = (v) => (toDate(v) ? `${fmtDate(v)} at ${fmtTime(v)}` : '-');
+export const fmtLongDay = (v) => { const d = toDate(v); if (!d) return '-'; return `${DAYS[d.getDay()]}, ${LONG_MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`; };
 export const sameDay = (a, b) => { const x = toDate(a), y = toDate(b); if (!x || !y) return false; return x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate(); };
 export const hourLabel = (h) => `${h % 12 || 12}:00 ${h >= 12 ? 'PM' : 'AM'}`;
 
@@ -48,7 +48,7 @@ export const nextId = (prefix, existing) => {
 // "2.5" → "2 h 30 min"
 export const fmtHours = (h) => {
   const n = Number(h);
-  if (!Number.isFinite(n) || n <= 0) return '—';
+  if (!Number.isFinite(n) || n <= 0) return '-';
   const whole = Math.floor(n); const mins = Math.round((n - whole) * 60);
   return [whole ? `${whole} hour${whole === 1 ? '' : 's'}` : '', mins ? `${mins} min` : ''].filter(Boolean).join(' ');
 };

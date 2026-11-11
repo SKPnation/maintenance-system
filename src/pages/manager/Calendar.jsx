@@ -62,7 +62,7 @@ export default function ManagerCalendar() {
               <div key={d.toISOString()} className={`cal-day ${sameDay(d, new Date()) ? 'is-today' : ''}`}>
                 <div className="cal-day-head"><span>{DAY_NAMES[d.getDay()]}</span><strong>{d.getDate()}</strong></div>
                 <div className="cal-day-body">
-                  {jobs.length === 0 && <div className="cal-empty">—</div>}
+                  {jobs.length === 0 && <div className="cal-empty">-</div>}
                   {jobs.map((w) => (
                     <button key={w.id} type="button" className={`cal-ev cal-ev-${(w.status || '').replace(/\s/g, '').toLowerCase()}`} onClick={() => open(w.id)}>
                       <span className="cal-ev-time">{timeLabel(w.scheduledAt)} · {fmtHours(w.durationHours)}</span>

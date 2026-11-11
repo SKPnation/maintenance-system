@@ -43,7 +43,7 @@ Check if the Android project already has a `google-services.json` file in its
 ### `google-services.json` file is present
 
 If the Android project already has a `google-services.json` file, do NOT create
-a new Firebase project or re-register the app — skip steps 2 through 4 below.
+a new Firebase project or re-register the app - skip steps 2 through 4 below.
 Instead, verify the existing Firebase setup within the codebase and fix anything
 that is missing:
 

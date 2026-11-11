@@ -2,7 +2,7 @@
 
 "use strict";
 
-// Priority levels: defaults, validation and helpers. Pure — no Firestore.
+// Priority levels: defaults, validation and helpers. Pure - no Firestore.
 
 const {HttpsError} = require("firebase-functions/v2/https");
 

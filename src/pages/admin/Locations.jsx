@@ -188,7 +188,7 @@ export default function Locations() {
           }}>
             <span>
               <strong>{building.name}</strong>
-              {' — '}
+              {' - '}
               {building.active ? 'Active' : 'Inactive'}
             </span>
 
@@ -221,7 +221,7 @@ export default function Locations() {
       {selectedBuilding && (
         <div className="card" style={{padding: 24, marginTop: 20}}>
           <h3>
-            Rooms — {buildings.find(b => b.id === selectedBuilding)?.name}
+            Rooms - {buildings.find(b => b.id === selectedBuilding)?.name}
           </h3>
 
           <form onSubmit={saveRoom} style={{
@@ -274,7 +274,7 @@ export default function Locations() {
               borderBottom: '1px solid #ddd'
             }}>
               <span>
-                {room.name} — {room.active ? 'Active' : 'Inactive'}
+                {room.name} - {room.active ? 'Active' : 'Inactive'}
               </span>
 
               <div style={{display: 'flex', gap: 8}}>

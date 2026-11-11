@@ -158,12 +158,12 @@ scene:
 
 Embed delivery markers inline within dialogue or narration:
 
-- `[whispers]` — Soft, confidential whisper.
-- `[laughs]` / `[chuckles]` — Lighthearted laughter during delivery.
-- `[sighs]` — Expressive exhale.
-- `[slowly]` — Reduced tempo for emphasis or dramatic effect.
-- `[excited]` — Higher energy and faster pacing.
-- `[pause]` — Deliberate silence.
+- `[whispers]` - Soft, confidential whisper.
+- `[laughs]` / `[chuckles]` - Lighthearted laughter during delivery.
+- `[sighs]` - Expressive exhale.
+- `[slowly]` - Reduced tempo for emphasis or dramatic effect.
+- `[excited]` - Higher energy and faster pacing.
+- `[pause]` - Deliberate silence.
 
 ### Multi-Speaker Prompt Example
 

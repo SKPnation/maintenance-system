@@ -369,7 +369,7 @@ export default function RequestDetail() {
     },
     {
       title: 'Work Completed',
-      meta: workCompleted ? formatRequestDate(req.workOrderStatusUpdatedAt) : workStatus || 'Pending',
+      meta: workCompleted ? formatRequestDate(req.workOrderStatusUpdatedAt) : workStatus === 'In Progress' ? 'Technician is working on it' : 'Not started yet',
       text: 'The technician has finished the repair.',
       completed: workCompleted,
     },

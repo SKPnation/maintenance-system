@@ -63,7 +63,7 @@ export default function Sidebar({ role }) {
 
       <div className="nav-group nav-bottom">
         {nav.bottom.map((it) => <NavItem key={it.to} item={it} muted />)}
-        <button type="button" className="nav-item muted" onClick={() => { signOut(); navigate('/login'); }}>
+        <button type="button" className="nav-item muted" onClick={async () => { await signOut(); navigate('/'); }}>
           <Icon name="logOut" size={22} strokeWidth={1.7} />
           <span className="nav-label">Log Out</span>
         </button>

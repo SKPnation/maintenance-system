@@ -275,13 +275,20 @@ const onSubmit = async (e) => {
           </div>
 
           <h2 className="auth-title">
-            Sign In
+            {user ? 'Add another account' : 'Sign In'}
           </h2>
 
           <p className="auth-sub">
-            Access your account to manage maintenance
-            requests and work orders.
+            {user
+              ? `You're still signed in as ${user.name || user.email}. Sign in with another account to add it — then switch between them from the user menu.`
+              : 'Access your account to manage maintenance requests and work orders.'}
           </p>
+
+          {user && (
+            <button type="button" className="link" style={{ marginBottom: 8 }} onClick={() => navigate('/')}>
+              ← Back to {user.name || 'your account'}
+            </button>
+          )}
 
           {/* EMAIL */}
           <Field

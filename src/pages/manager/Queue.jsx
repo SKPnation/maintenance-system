@@ -7,7 +7,7 @@ import {
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useStore } from '../../context/StoreContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
-import { CATEGORIES, PRIORITY_NAMES, TRADES } from '../../data/mock.js';
+import { CATEGORIES, TRADES } from '../../data/mock.js';
 import { fmtDate, fmtDateTime, fmtTime } from '../../data/format.js';
 
 const getDate = (value) => value?.toDate?.() || (value?.seconds ? new Date(value.seconds * 1000) : value ? new Date(value) : null);
@@ -21,7 +21,7 @@ const PRIORITY_RANK = { Critical: 0, High: 1, Medium: 2, Low: 3 };
 
 export default function ManagerQueue() {
   const { user } = useAuth();
-  const { requests, updateRequest, rejectRequest } = useStore();
+  const { requests, updateRequest, rejectRequest, priorityNames } = useStore();
   const toast = useToast();
   const navigate = useNavigate();
 
@@ -97,7 +97,7 @@ export default function ManagerQueue() {
 
         <div className="filters">
           <Input className="grow" icon="search" placeholder="Search requests..." value={q} onChange={(e) => setQ(e.target.value)} />
-          <Select options={[{ value: '', label: 'All Priorities' }, ...PRIORITY_NAMES]} value={priority} onChange={(e) => setPriority(e.target.value)} style={{ width: 182 }} aria-label="Filter by priority" />
+          <Select options={[{ value: '', label: 'All Priorities' }, ...priorityNames]} value={priority} onChange={(e) => setPriority(e.target.value)} style={{ width: 182 }} aria-label="Filter by priority" />
           <Select options={[{ value: 'newest', label: 'Newest First' }, { value: 'oldest', label: 'Oldest First' }, { value: 'priority', label: 'Highest Priority' }]} value={sort} onChange={(e) => setSort(e.target.value)} style={{ width: 212 }} aria-label="Sort" />
         </div>
 
@@ -161,6 +161,7 @@ export default function ManagerQueue() {
 }
 
 function RequestPanel({ request: r, onClose, onSave, onReject, onApprove }) {
+  const { priorityNames } = useStore();
   const [tab, setTab] = useState('overview');
   const [form, setForm] = useState({
     category: r.ai?.category || r.routedCategory || '', priority: r.priority || r.ai?.priority || 'Medium', trade: r.ai?.trade || '', safety: (r.safety || r.ai?.safetyFlag) ? 'Yes' : 'No', notes: '',
@@ -230,7 +231,7 @@ function RequestPanel({ request: r, onClose, onSave, onReject, onApprove }) {
         <div className="box-title" style={{ fontSize: 14 }}><Icon name="edit" size={18} strokeWidth={2} />Manager Action</div>
         <div className="form-grid-2" style={{ marginTop: 12, gap: '10px 14px' }}>
           <Field label="Category"><Select options={CATEGORIES} value={form.category} onChange={set('category')} /></Field>
-          <Field label="Priority"><Select options={PRIORITY_NAMES} value={form.priority} onChange={set('priority')} /></Field>
+          <Field label="Priority"><Select options={priorityNames} value={form.priority} onChange={set('priority')} /></Field>
           <Field label="Trade"><Select options={TRADES} value={form.trade} onChange={set('trade')} /></Field>
           <Field label="Safety Flag"><Select options={['No', 'Yes']} value={form.safety} onChange={set('safety')} /></Field>
         </div>

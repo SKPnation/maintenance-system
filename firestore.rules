@@ -7,6 +7,7 @@ service cloud.firestore {
   function isRole(r){return active() && profile().role == r;}
   match /users/{uid}{allow read: if active() && (request.auth.uid==uid || isRole('admin') || (isRole('manager') && resource.data.role=='technician'));allow write: if false;}
   match /buildings/{id}{allow read: if active();allow write: if false;}
+  match /priorityLevels/{id}{allow read: if active();allow write: if false;}
   match /requests/{id}{allow read: if active() && (isRole('admin') || (isRole('requester') && resource.data.requesterId==request.auth.uid) || (isRole('manager') && (profile().category==resource.data.routedCategory)));allow write: if false;}
   match /workOrders/{id}{allow read: if active() && (isRole('admin') || (isRole('manager') && profile().category==resource.data.category) || (isRole('technician') && resource.data.technicianId==request.auth.uid));allow write: if false;}
   match /{document=**}{allow read,write: if false;}

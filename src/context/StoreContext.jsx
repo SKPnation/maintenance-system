@@ -191,7 +191,8 @@ export function StoreProvider({ children }) {
     requests: [],
     workOrders: [],
     technicians: [],
-    buildings: []
+    buildings: [],
+    priorityLevels: []
   });
 
   const { user } = useAuth();
@@ -206,7 +207,8 @@ export function StoreProvider({ children }) {
         requests: [],
         workOrders: [],
         technicians: [],
-        buildings: []
+        buildings: [],
+        priorityLevels: []
       });
 
       return;
@@ -258,6 +260,11 @@ export function StoreProvider({ children }) {
       [
         'buildings',
         collection(db, 'buildings')
+      ],
+
+      [
+        'priorityLevels',
+        collection(db, 'priorityLevels')
       ],
 
       ...(user.role === 'manager'
@@ -704,17 +711,28 @@ export function StoreProvider({ children }) {
     // Priorities
     // -----------------------------------------------------
 
+    // Saved to Firestore once the admin has imported the levels; until then
+    // edits stay in this browser like the rest of the demo data.
     savePriority(priority) {
-      dispatch({
-        type: 'priority/save',
-        priority
-      });
+      const { isNew, ...level } = priority;
+      if (configured && remote.priorityLevels.length) {
+        return api('savePriorityLevel', { ...level, id: isNew ? undefined : level.id });
+      }
+      dispatch({ type: 'priority/save', priority: level });
+      return Promise.resolve({ id: level.id });
     },
 
     deletePriority(id) {
-      dispatch({
-        type: 'priority/delete',
-        id
+      if (configured && remote.priorityLevels.length) {
+        return api('deletePriorityLevel', { id });
+      }
+      dispatch({ type: 'priority/delete', id });
+      return Promise.resolve();
+    },
+
+    importPriorities() {
+      return api('importPriorityLevels', {
+        levels: state.priorities.map(({ id, isNew, ...level }) => level)
       });
     },
 
@@ -730,8 +748,16 @@ export function StoreProvider({ children }) {
 
   }), [
     state.requests,
-    state.workOrders
+    state.workOrders,
+    state.priorities,
+    remote.priorityLevels.length
   ]);
+
+  const prioritiesSaved = configured && remote.priorityLevels.length > 0;
+  const priorities = prioritiesSaved
+    ? [...remote.priorityLevels].sort((a, b) => (a.rank || 999) - (b.rank || 999))
+    : state.priorities;
+  const priorityNames = priorities.filter((p) => p.active).map((p) => p.name);
 
   // -------------------------------------------------------
   // Context Provider
@@ -750,6 +776,10 @@ export function StoreProvider({ children }) {
               buildings: remote.buildings
             }
           : {}),
+
+        priorities,
+        prioritiesSaved,
+        priorityNames,
 
         ...actions
       }}

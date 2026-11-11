@@ -11,6 +11,7 @@ const {getAuth} = require("firebase-admin/auth");
 const {getFirestore, FieldValue} = require("firebase-admin/firestore");
 const OpenAI = require("openai");
 const workflow = require("./workflow");
+const priorities = require("./priorities");
 
 initializeApp();
 
@@ -20,7 +21,6 @@ const openaiKey = defineSecret("OPENAI_API_KEY");
 
 const DEFAULT_CATEGORY = "General Maintenance";
 const ROLES = new Set(["requester", "manager", "technician", "admin"]);
-const PRIORITIES = ["Low", "Medium", "High", "Critical"];
 
 // ============================================================
 // VALIDATION HELPERS
@@ -59,16 +59,13 @@ function validateRole(role) {
   return role;
 }
 
-function normalizePriority(value) {
-  return PRIORITIES.includes(value) ? value : "Medium";
-}
+// Admin-configured priority levels; the built-in defaults until some are saved.
+async function loadPriorityLevels() {
+  const snapshot = await db.collection("priorityLevels").get();
 
-function validatePriority(value) {
-  if (!PRIORITIES.includes(value)) {
-    throw new HttpsError("invalid-argument", "Invalid priority.");
-  }
+  if (snapshot.empty) return priorities.DEFAULT_PRIORITY_LEVELS;
 
-  return value;
+  return snapshot.docs.map((doc) => ({id: doc.id, ...doc.data()})).sort(priorities.byRank);
 }
 
 function validateBoolean(value, field) {
@@ -646,7 +643,7 @@ async function submitRequest(payload, request) {
 // MANAGER: SAVE REVIEW CHANGES
 // ============================================================
 
-function validateReviewChanges(changes, category) {
+function validateReviewChanges(changes, category, levels) {
   if (
     !changes ||
         typeof changes !== "object" ||
@@ -661,7 +658,7 @@ function validateReviewChanges(changes, category) {
   const result = {};
 
   if (changes.priority !== undefined) {
-    result.priority = validatePriority(changes.priority);
+    result.priority = priorities.validatePriorityName(changes.priority, levels);
   }
 
   if (changes.safety !== undefined) {
@@ -709,6 +706,7 @@ async function updateManagerRequest(payload, request) {
   const changes = validateReviewChanges(
       payload.changes,
       manager.category,
+      await loadPriorityLevels(),
   );
 
   const ref = db.collection("requests").doc(id);
@@ -817,7 +815,7 @@ async function approveManagerRequest(payload, request) {
   );
 
   const trade = nonemptyString(input.trade, "trade", 100);
-  const priority = validatePriority(input.priority);
+  const priority = priorities.validatePriorityName(input.priority, await loadPriorityLevels());
   const safety = validateBoolean(input.safety, "safety");
 
   const technicianId = optionalString(
@@ -1307,6 +1305,138 @@ async function listWorkOrderNotes(payload, request) {
 }
 
 // ============================================================
+// ADMIN: PRIORITY LEVELS
+// ============================================================
+
+async function priorityInUse(name) {
+  const [requests, workOrders] = await Promise.all([
+    db.collection("requests").where("priority", "==", name).limit(1).get(),
+    db.collection("workOrders").where("priority", "==", name).limit(1).get(),
+  ]);
+
+  return !requests.empty || !workOrders.empty;
+}
+
+async function savedPriorityLevels() {
+  const snapshot = await db.collection("priorityLevels").get();
+  return snapshot.docs.map((doc) => ({id: doc.id, ...doc.data()}));
+}
+
+// First save: copy the levels the admin sees (the demo set) into the database.
+async function importPriorityLevels(payload) {
+  const input = payload.levels;
+
+  if (!Array.isArray(input) || input.length < 1 || input.length > 20) {
+    throw new HttpsError("invalid-argument", "Provide between 1 and 20 priority levels.");
+  }
+
+  const levels = input.map((level) => priorities.validateLevel(level));
+  const names = new Set(levels.map((level) => level.normalizedName));
+
+  if (names.size !== levels.length) {
+    throw new HttpsError("invalid-argument", "Priority level names must be unique.");
+  }
+
+  if (!levels.some((level) => level.active)) {
+    throw new HttpsError("invalid-argument", "At least one priority level must be active.");
+  }
+
+  const collection = db.collection("priorityLevels");
+
+  await db.runTransaction(async (transaction) => {
+    const existing = await transaction.get(collection.limit(1));
+
+    if (!existing.empty) {
+      throw new HttpsError("failed-precondition", "Priority levels are already saved in the database.");
+    }
+
+    const now = FieldValue.serverTimestamp();
+
+    levels.forEach((level, index) => {
+      transaction.create(collection.doc(), {...level, rank: index + 1, createdAt: now, updatedAt: now});
+    });
+  });
+
+  return {success: true, count: levels.length};
+}
+
+async function savePriorityLevel(payload) {
+  const data = priorities.validateLevel(payload);
+  const id = optionalString(payload.id, "priority level ID", 128);
+  const saved = await savedPriorityLevels();
+
+  if (!saved.length) {
+    throw new HttpsError("failed-precondition", "Save the starting priority levels to the database first.");
+  }
+
+  if (saved.some((level) => level.id !== id && level.normalizedName === data.normalizedName)) {
+    throw new HttpsError("already-exists", "A priority level with this name already exists.");
+  }
+
+  const otherActive = saved.some((level) => level.id !== id && level.active === true);
+
+  if (!data.active && !otherActive) {
+    throw new HttpsError("failed-precondition", "At least one priority level must stay active.");
+  }
+
+  const now = FieldValue.serverTimestamp();
+
+  if (id) {
+    const current = saved.find((level) => level.id === id);
+
+    if (!current) {
+      throw new HttpsError("not-found", "Priority level not found.");
+    }
+
+    // Requests and work orders store the level by name, so keep names stable once used.
+    if (current.name !== data.name && await priorityInUse(current.name)) {
+      throw new HttpsError(
+          "failed-precondition",
+          `"${current.name}" is already used by requests or work orders, so it can't be renamed. Mark it inactive and add a new level instead.`,
+      );
+    }
+
+    await db.collection("priorityLevels").doc(id).update({...data, updatedAt: now});
+
+    return {success: true, id};
+  }
+
+  const rank = Math.max(0, ...saved.map((level) => Number(level.rank) || 0)) + 1;
+  const ref = await db.collection("priorityLevels").add({...data, rank, createdAt: now, updatedAt: now});
+
+  return {success: true, id: ref.id};
+}
+
+async function deletePriorityLevel(payload) {
+  const id = nonemptyString(payload.id, "priority level ID", 128);
+  const ref = db.collection("priorityLevels").doc(id);
+  const snapshot = await ref.get();
+
+  if (!snapshot.exists) {
+    throw new HttpsError("not-found", "Priority level not found.");
+  }
+
+  const level = snapshot.data();
+
+  if (await priorityInUse(level.name)) {
+    throw new HttpsError(
+        "failed-precondition",
+        `"${level.name}" is used by existing requests or work orders. Mark it inactive instead.`,
+    );
+  }
+
+  const saved = await savedPriorityLevels();
+
+  if (level.active && !saved.some((other) => other.id !== id && other.active === true)) {
+    throw new HttpsError("failed-precondition", "At least one priority level must stay active.");
+  }
+
+  await ref.delete();
+
+  return {success: true, id};
+}
+
+// ============================================================
 // MAIN FIREBASE CALLABLE API
 // ============================================================
 
@@ -1353,6 +1483,18 @@ exports.maintenanceApi = onCall(
         case "deleteRoom":
           await requireAdmin(request);
           return await deleteRoom(payload);
+
+        case "importPriorityLevels":
+          await requireAdmin(request);
+          return await importPriorityLevels(payload);
+
+        case "savePriorityLevel":
+          await requireAdmin(request);
+          return await savePriorityLevel(payload);
+
+        case "deletePriorityLevel":
+          await requireAdmin(request);
+          return await deletePriorityLevel(payload);
 
           // Requester actions
         case "submitRequest":
@@ -1457,6 +1599,8 @@ exports.analyzeNewMaintenanceRequest = onDocumentCreated(
           ),
         ];
 
+        const levels = await loadPriorityLevels();
+
         const client = new OpenAI({
           apiKey: openaiKey.value(),
         });
@@ -1478,7 +1622,7 @@ exports.analyzeNewMaintenanceRequest = onDocumentCreated(
                             "safetyFlag, confidence, and suggestedAction. " +
                             `Category must be one of ${JSON.stringify(categories)}. ` +
                             `If none is suitable, use "${DEFAULT_CATEGORY}". ` +
-                            "Priority must be Low, Medium, High, or Critical. " +
+                            priorities.priorityPrompt(levels) +
                             "Confidence must be a number between 0 and 1. " +
                             "safetyFlag must be a boolean. " +
                             "Do not assert that an issue is safe simply because " +
@@ -1519,7 +1663,7 @@ exports.analyzeNewMaintenanceRequest = onDocumentCreated(
                     "General Maintenance";
 
         const safetyFlag = raw.safetyFlag === true;
-        const priority = normalizePriority(raw.priority);
+        const priority = priorities.pickPriority(raw.priority, levels);
 
         await ref.update({
           routedCategory: category,

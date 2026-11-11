@@ -6,7 +6,7 @@ import {
 } from '../../components/ui.jsx';
 import { useStore } from '../../context/StoreContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
-import { CATEGORIES, PRIORITY_NAMES, TRADES } from '../../data/mock.js';
+import { CATEGORIES, TRADES } from '../../data/mock.js';
 import { fmtDateTime } from '../../data/format.js';
 import { tradesMatch } from '../../data/trades.js';
 
@@ -23,7 +23,7 @@ const CHIP_BY_PRIORITY = { Critical: 'chip-red', High: 'chip-red', Medium: 'chip
 
 export default function ReviewWorkOrder() {
   const { id } = useParams();
-  const { requests, technicians, approveRequest, rejectRequest, updateRequest } = useStore();
+  const { requests, technicians, approveRequest, rejectRequest, updateRequest, priorityNames } = useStore();
   const toast = useToast();
   const navigate = useNavigate();
   const r = requests.find((x) => x.id === id);
@@ -126,7 +126,7 @@ export default function ReviewWorkOrder() {
             <fieldset disabled={locked} style={{ border: 'none' }} className="stack gap-12">
               <div className="form-grid-2">
                 <Field label="Category" required><Select options={CATEGORIES} value={form.category} onChange={set('category')} /></Field>
-                <Field label="Priority" required><Select options={PRIORITY_NAMES} value={form.priority} onChange={set('priority')} /></Field>
+                <Field label="Priority" required><Select options={priorityNames} value={form.priority} onChange={set('priority')} /></Field>
                 <Field label="Trade" required error={errors.trade}><Select placeholder="Select a trade" options={TRADES} value={form.trade} onChange={set('trade')} invalid={!!errors.trade} /></Field>
                 <Field label="Safety Flag" required><Select options={['No', 'Yes']} value={form.safety} onChange={set('safety')} /></Field>
               </div>

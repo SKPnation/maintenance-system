@@ -197,14 +197,21 @@ function ensurePendingReview(record) {
 
 function validateTechnician(snapshot, trade) {
   if (
-    (!snapshot || !snapshot.exists) ||
-        snapshot.get("active") !== true ||
-        snapshot.get("role") !== "technician" ||
-        snapshot.get("trade") !== trade
+    !snapshot ||
+    !snapshot.exists ||
+    snapshot.get("active") !== true ||
+    snapshot.get("role") !== "technician"
   ) {
     throw new HttpsError(
         "invalid-argument",
-        "Select an active technician with the matching trade.",
+        "Select an active technician.",
+    );
+  }
+
+  if (!workflow.tradesMatch(snapshot.get("trade"), trade)) {
+    throw new HttpsError(
+        "invalid-argument",
+        `${snapshot.get("name") || "This technician"}'s trade (${snapshot.get("trade") || "not set"}) does not match this work order's trade (${trade || "not set"}).`,
     );
   }
 }

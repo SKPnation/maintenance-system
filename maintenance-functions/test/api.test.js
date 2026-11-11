@@ -222,3 +222,15 @@ test("request carries requester-safe progress, schedule and history", async () =
   assert.deepEqual(req.history.map((h) => h.type), ["scheduled", "work_status"]);
   assert.ok(!JSON.stringify(req).includes("Secret"));
 });
+
+test("assignment accepts equivalent trade wording and explains real mismatches", async () => {
+  db.seed("users/techShort", {active: true, role: "technician", trade: "HVAC", name: "Usman"});
+  db.seed("users/sparky", {active: true, role: "technician", trade: "Electrician", name: "Sparky"});
+  db.seed("workOrders/woOpen", {title: "x", category: "HVAC", trade: "HVAC Technician", status: "Unassigned", technicianId: ""});
+
+  await call("mgr", "assignTechnician", {id: "woOpen", technicianId: "techShort"});
+  assert.equal(db.read("workOrders/woOpen").technicianId, "techShort");
+
+  await rejects(call("mgr", "assignTechnician", {id: "woOpen", technicianId: "sparky"}), "invalid-argument", /Sparky's trade \(Electrician\) does not match/);
+  await rejects(call("mgr", "assignTechnician", {id: "woOpen", technicianId: "techOff"}), "invalid-argument", /active technician/);
+});

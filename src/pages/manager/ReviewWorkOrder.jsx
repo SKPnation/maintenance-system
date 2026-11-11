@@ -8,6 +8,7 @@ import { useStore } from '../../context/StoreContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { CATEGORIES, PRIORITY_NAMES, TRADES } from '../../data/mock.js';
 import { fmtDateTime } from '../../data/format.js';
+import { tradesMatch } from '../../data/trades.js';
 
 function formatTimestamp(value) {
   if (!value) return 'Not available';
@@ -32,7 +33,7 @@ export default function ReviewWorkOrder() {
     title: r ? `Inspect and service: ${r.description.split('.')[0].slice(0, 60)}` : '',
     description: r?.ai?.suggestedAction || '',
     notes: '',
-    technicianId: technicians.find((t) => t.trade === r?.ai?.trade)?.id || '',
+    technicianId: technicians.find((t) => tradesMatch(t.trade, r?.ai?.trade))?.id || '',
   }));
   // Requests and technicians may arrive after this component first renders.
   useEffect(() => {
@@ -45,7 +46,7 @@ export default function ReviewWorkOrder() {
       safety: r.safety || r.ai?.safetyFlag ? 'Yes' : 'No',
       title: `Inspect and service: ${(r.description || '').split('.')[0].slice(0, 60)}`,
       description: r.ai?.suggestedAction || r.description || '',
-      technicianId: technicians.find((t) => t.trade === r.ai?.trade)?.id || '',
+      technicianId: technicians.find((t) => tradesMatch(t.trade, r.ai?.trade))?.id || '',
     }));
   }, [r?.id, r?.analysisStatus, technicians.length]);
 
@@ -138,7 +139,7 @@ export default function ReviewWorkOrder() {
                   {tech ? <Avatar initials={tech.initials || tech.name?.slice(0, 2) || 'T'} size={32} /> : null}
                   <select value={form.technicianId} onChange={set('technicianId')} aria-label="Technician">
                     <option value="">Assign later</option>
-                    {technicians.filter((t) => !form.trade || t.trade === form.trade).map((t) => <option key={t.id} value={t.id}>{t.name} ({t.trade})</option>)}
+                    {technicians.filter((t) => !form.trade || tradesMatch(t.trade, form.trade)).map((t) => <option key={t.id} value={t.id}>{t.name} ({t.trade})</option>)}
                   </select>
                   <Icon name="chevronDown" size={16} strokeWidth={2.4} className="select-caret" />
                 </div>

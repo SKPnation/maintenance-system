@@ -2,6 +2,7 @@
 import { useAuth } from './AuthContext.jsx';
 import {
   collection,
+  doc,
   onSnapshot,
   query,
   where
@@ -17,6 +18,7 @@ import {
 } from 'react';
 import {
   ASSETS,
+  CATEGORIES,
   NOTIFICATIONS,
   PRIORITIES,
   REQUESTS,
@@ -192,10 +194,41 @@ export function StoreProvider({ children }) {
     workOrders: [],
     technicians: [],
     buildings: [],
-    priorityLevels: []
+    priorityLevels: [],
+    categories: [],
+    managers: [],
+    assets: []
   });
 
+  // settings/routing exists once an admin has set up routing (PB-13);
+  // settings/support holds the verified facilities contact (PB-35).
+  const [settings, setSettings] = useState({ routing: null, support: null });
+
   const { user } = useAuth();
+
+  useEffect(() => {
+    if (!configured || !user) {
+      setSettings({ routing: null, support: null });
+      return;
+    }
+
+    const watch = (name) => onSnapshot(
+      doc(db, 'settings', name),
+      (snapshot) => setSettings((previous) => ({
+        ...previous,
+        [name]: snapshot.exists() ? snapshot.data() : false
+      })),
+      (error) => {
+        console.error(`Failed to load ${name} settings:`, error);
+        setSettings((previous) => ({ ...previous, [name]: false }));
+      }
+    );
+
+    const stops = [watch('routing'), watch('support')];
+    return () => stops.forEach((stop) => stop());
+  }, [user?.id]);
+
+  const routingConfigured = settings.routing ? true : settings.routing === false ? false : null;
 
   // -------------------------------------------------------
   // Firebase Realtime Subscriptions
@@ -208,11 +241,21 @@ export function StoreProvider({ children }) {
         workOrders: [],
         technicians: [],
         buildings: [],
-        priorityLevels: []
+        priorityLevels: [],
+        categories: [],
+        managers: [],
+        assets: []
       });
 
       return;
     }
+
+    // Managers' queries depend on whether routing is set up.
+    if (user.role === 'manager' && routingConfigured === null) {
+      return;
+    }
+
+    const routed = routingConfigured === true;
 
     const requestsQuery =
       user.role === 'requester'
@@ -223,11 +266,13 @@ export function StoreProvider({ children }) {
         : user.role === 'manager'
           ? query(
               collection(db, 'requests'),
-              where(
-                'routedCategory',
-                '==',
-                user.category || 'General Maintenance'
-              )
+              routed
+                ? where('routedManagerId', '==', user.id)
+                : where(
+                    'routedCategory',
+                    '==',
+                    user.category || 'General Maintenance'
+                  )
             )
           : null;
 
@@ -240,11 +285,13 @@ export function StoreProvider({ children }) {
         : user.role === 'manager'
           ? query(
               collection(db, 'workOrders'),
-              where(
-                'category',
-                '==',
-                user.category || 'General'
-              )
+              routed
+                ? where('managerId', '==', user.id)
+                : where(
+                    'category',
+                    '==',
+                    user.category || 'General'
+                  )
             )
           : null;
 
@@ -266,6 +313,27 @@ export function StoreProvider({ children }) {
         'priorityLevels',
         collection(db, 'priorityLevels')
       ],
+
+      [
+        'categories',
+        collection(db, 'categories')
+      ],
+
+      ...(user.role !== 'requester'
+        ? [['assets', collection(db, 'assets')]]
+        : []),
+
+      ...(user.role === 'admin'
+        ? [
+            [
+              'managers',
+              query(
+                collection(db, 'users'),
+                where('role', '==', 'manager')
+              )
+            ]
+          ]
+        : []),
 
       ...(user.role === 'manager'
         ? [
@@ -289,7 +357,7 @@ export function StoreProvider({ children }) {
             ...doc.data()
           }));
 
-          if (name === 'technicians') {
+          if (name === 'technicians' || name === 'managers') {
             rows = rows.filter(
               (technician) => technician.active
             );
@@ -317,7 +385,8 @@ export function StoreProvider({ children }) {
   }, [
     user?.id,
     user?.role,
-    user?.category
+    user?.category,
+    routingConfigured
   ]);
 
   // -------------------------------------------------------
@@ -737,6 +806,39 @@ export function StoreProvider({ children }) {
     },
 
     // -----------------------------------------------------
+    // Categories and routing (PB-13)
+    // -----------------------------------------------------
+
+    importRouting(categories) {
+      return api('importRouting', { categories });
+    },
+
+    saveCategory(category) {
+      return api('saveCategory', category);
+    },
+
+    // PB-04: internal review log for a request.
+    listReviewHistory(id) {
+      return api('listReviewHistory', { id });
+    },
+
+    // -----------------------------------------------------
+    // Assets (PB-20) and support contact (PB-35)
+    // -----------------------------------------------------
+
+    createAsset(asset) {
+      return api('createAsset', asset);
+    },
+
+    updateAsset(asset) {
+      return api('updateAsset', asset);
+    },
+
+    saveSupportSettings(values) {
+      return api('saveSupportSettings', values);
+    },
+
+    // -----------------------------------------------------
     // Reset Demo Data
     // -----------------------------------------------------
 
@@ -759,6 +861,25 @@ export function StoreProvider({ children }) {
     : state.priorities;
   const priorityNames = priorities.filter((p) => p.active).map((p) => p.name);
 
+  // Categories: saved routing categories, or the built-in list before setup.
+  const categories = routingConfigured && remote.categories.length
+    ? [...remote.categories].sort((a, b) => (a.rank || 999) - (b.rank || 999))
+    : CATEGORIES.map((name, index) => ({ id: name, name, active: true, managerId: '', rank: index + 1 }));
+  const categoryNames = categories.filter((c) => c.active).map((c) => c.name);
+
+  // Categories this manager currently receives.
+  const managedCategories = user?.role !== 'manager'
+    ? []
+    : routingConfigured
+      ? categories.filter((c) => c.active && c.managerId === user.id).map((c) => c.name)
+      : [user.category].filter(Boolean);
+
+  // A verified contact only; never a sample number.
+  const support = settings.support || {};
+  const emergencyContact = support.verified && String(support.emergencyPhone || '').replace(/\D/g, '').length >= 7
+    ? { label: support.emergencyLabel || 'Facilities emergency line', phone: support.emergencyPhone }
+    : null;
+
   // -------------------------------------------------------
   // Context Provider
   // -------------------------------------------------------
@@ -773,9 +894,18 @@ export function StoreProvider({ children }) {
               requests: remote.requests,
               workOrders: remote.workOrders,
               technicians: remote.technicians,
-              buildings: remote.buildings
+              buildings: remote.buildings,
+              assets: remote.assets,
+              managers: remote.managers
             }
-          : {}),
+          : { managers: [] }),
+
+        categories,
+        categoryNames,
+        managedCategories,
+        routingConfigured,
+        supportSettings: support,
+        emergencyContact,
 
         priorities,
         prioritiesSaved,

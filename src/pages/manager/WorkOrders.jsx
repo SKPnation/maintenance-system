@@ -1,33 +1,26 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Button, Card, EmptyState, Modal, PageHeader, PriorityPill, Select, StatusPill } from '../../components/ui.jsx';
 import { ScheduleForm, ScheduleHistory } from '../../components/Scheduling.jsx';
-import { useAuth } from '../../context/AuthContext.jsx';
+import { useWorkOrderFilters, WorkOrderFilters } from '../../components/WorkOrderFilters.jsx';
 import { useStore } from '../../context/StoreContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
-import { fmtServiceWindow, localDateKey } from '../../data/format.js';
+import { fmtServiceWindow } from '../../data/format.js';
+import { useManagerScope } from '../../data/managerScope.js';
 import { tradesMatch } from '../../data/trades.js';
 
 const CLOSED = ['Completed', 'Cancelled'];
 
 export default function WorkOrders() {
-  const { user } = useAuth();
-  const { workOrders = [], technicians = [], assignTechnician } = useStore();
+  const { technicians = [], assignTechnician, priorityNames = [] } = useStore();
+  const { workOrders: myOrders, categories, label } = useManagerScope();
   const toast = useToast();
   const [saving, setSaving] = useState('');
-  const [filters, setFilters] = useState({ priority: '', status: '', technician: '', date: '' });
   const [scheduling, setScheduling] = useState(null);
-  const category = user?.category;
+  const filterState = useWorkOrderFilters(myOrders);
+  const { filtered, active, clear } = filterState;
 
-  const myOrders = useMemo(() => workOrders.filter((w) => category && w.category === category), [workOrders, category]);
-  const filtered = myOrders.filter((w) =>
-    (!filters.priority || w.priority === filters.priority) &&
-    (!filters.status || w.status === filters.status) &&
-    (!filters.technician || w.technicianId === filters.technician) &&
-    (!filters.date || localDateKey(w.scheduledAt) === filters.date));
   const techName = (id) => technicians.find((t) => t.id === id)?.name || '';
-  const options = (key) => [...new Set(myOrders.map((w) => (key === 'technician' ? w.technicianId : w[key])).filter(Boolean))]
-    .map((v) => ({ value: v, label: key === 'technician' ? techName(v) || v : v }));
-  const selected = workOrders.find((w) => w.id === scheduling);
+  const selected = myOrders.find((w) => w.id === scheduling);
 
   async function assign(w, technicianId) {
     setSaving(w.id);
@@ -40,29 +33,31 @@ export default function WorkOrders() {
   return (
     <div className="page-inner">
       <PageHeader
-        title={`${category || 'Manager'} Work Orders`}
+        title="Work Orders"
+        badge={<span className="muted" style={{ fontSize: 15 }}>{label}</span>}
         subtitle="Assign technicians and schedule approved work. Requests awaiting review appear in My Queue."
         actions={<Button variant="secondary" icon="calendar" to="/manager/calendar">Open Calendar</Button>}
       />
       <Card>
-        <div className="row gap-12 wrap" style={{ marginBottom: 16 }}>
-          {['priority', 'status', 'technician'].map((k) => (
-            <Select key={k} className="input-sm" style={{ width: 180 }} aria-label={`Filter by ${k}`} placeholder={`All ${k === 'status' ? 'statuses' : k === 'priority' ? 'priorities' : 'technicians'}`} options={options(k)} value={filters[k]} onChange={(e) => setFilters({ ...filters, [k]: e.target.value })} />
-          ))}
-          <div className="input input-sm" style={{ width: 180 }}><input type="date" aria-label="Scheduled date" value={filters.date} onChange={(e) => setFilters({ ...filters, date: e.target.value })} /></div>
-        </div>
+        <WorkOrderFilters orders={myOrders} {...filterState} categories={categories} priorities={priorityNames} technicians={technicians} />
         {filtered.length === 0 ? (
-          <EmptyState icon="fileText" title="No work orders" text={myOrders.length ? 'No work orders match these filters.' : `No work orders created for ${category || 'your category'} yet.`} />
+          <EmptyState
+            icon="fileText"
+            title={active ? 'No matching work orders' : 'No work orders yet'}
+            text={active ? 'No work orders match these filters.' : `No work orders have been created for ${label} yet.`}
+            action={active ? <Button variant="secondary" size="sm" onClick={clear}>Clear filters</Button> : null}
+          />
         ) : (
           <div className="table-wrap">
             <table className="table">
-              <thead><tr><th>Work order</th><th>Priority</th><th>Status</th><th>Technician</th><th>Service time</th><th /></tr></thead>
+              <thead><tr><th>Work order</th><th>Category</th><th>Priority</th><th>Status</th><th>Technician</th><th>Service time</th><th /></tr></thead>
               <tbody>
                 {filtered.map((w) => {
                   const closed = CLOSED.includes(w.status);
                   return (
                     <tr key={w.id}>
                       <td style={{ maxWidth: 300 }}><div style={{ fontWeight: 600 }}>{w.title || 'Maintenance work order'}</div><div className="sub">{w.location}</div></td>
+                      <td style={{ whiteSpace: 'nowrap' }}>{w.category || '—'}</td>
                       <td><PriorityPill priority={w.priority} size="sm" /></td>
                       <td><StatusPill status={w.status} size="sm" /></td>
                       <td>

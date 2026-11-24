@@ -19,14 +19,13 @@ import {
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useStore } from '../../context/StoreContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
-import { EMERGENCY_PHONE } from '../../data/mock.js';
 
 const MAX_CHARS = 500;
 const MAX_BYTES = 5 * 1024 * 1024;
 
 export default function NewRequest() {
   const { user } = useAuth();
-  const { submitRequest, buildings = [] } = useStore();
+  const { submitRequest, buildings = [], emergencyContact } = useStore();
   const toast = useToast();
   const navigate = useNavigate();
   const fileRef = useRef(null);
@@ -597,7 +596,7 @@ export default function NewRequest() {
         >
           <WhatHappensNext />
           <RequestTips />
-          <SafetyCard phone={EMERGENCY_PHONE} />
+          <SafetyCard contact={emergencyContact} />
         </div>
       </div>
     </div>

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Avatar, Card, EmptyState, Input, PageHeader, Pill } from '../../components/ui.jsx';
-import { useAuth } from '../../context/AuthContext.jsx';
+import { useManagerScope } from '../../data/managerScope.js';
 import { useStore } from '../../context/StoreContext.jsx';
 import { fmtServiceWindow, toDate } from '../../data/format.js';
 
@@ -10,8 +10,8 @@ const initials = (name) => String(name || '?').split(/\s+/).map((w) => w[0]).joi
 
 // Technicians / Team: who is available and how loaded they are with this category's work.
 export default function Team() {
-  const { user } = useAuth();
-  const { technicians = [], workOrders = [] } = useStore();
+  const { workOrders, label } = useManagerScope();
+  const { technicians = [] } = useStore();
   const navigate = useNavigate();
   const [q, setQ] = useState('');
 
@@ -20,7 +20,7 @@ export default function Team() {
 
   const rows = useMemo(() => technicians
     .map((t) => {
-      const jobs = workOrders.filter((w) => w.technicianId === t.id && w.category === user?.category);
+      const jobs = workOrders.filter((w) => w.technicianId === t.id);
       const open = jobs.filter((w) => OPEN.includes(w.status));
       const upcoming = open
         .filter((w) => w.scheduledAt && toDate(w.scheduledAt).getTime() + Number(w.durationHours || 0) * 3600000 >= now)
@@ -36,11 +36,11 @@ export default function Team() {
       };
     })
     .filter((t) => `${t.name} ${t.trade} ${t.email}`.toLowerCase().includes(q.toLowerCase()))
-    .sort((a, b) => a.name.localeCompare(b.name)), [technicians, workOrders, user?.category, q]);
+    .sort((a, b) => a.name.localeCompare(b.name)), [technicians, workOrders, q]);
 
   return (
     <div className="page-inner">
-      <PageHeader title="Technicians / Team" subtitle={`Active technicians and their ${user?.category || 'category'} workload.`} />
+      <PageHeader title="Technicians / Team" subtitle={`Active technicians and their workload for ${label}.`} />
       <Card>
         <div className="row between wrap gap-12" style={{ marginBottom: 16 }}>
           <span className="muted" style={{ fontSize: 14 }}>{rows.length} technician{rows.length === 1 ? '' : 's'}</span>
@@ -82,7 +82,7 @@ export default function Team() {
             </table>
           </div>
         )}
-        <p className="field-hint" style={{ marginTop: 12 }}>Workload counts only {user?.category || 'your category'} work orders. Technicians may also have jobs from other categories.</p>
+        <p className="field-hint" style={{ marginTop: 12 }}>Workload counts only work orders you manage ({label}). Technicians may also have jobs from other categories.</p>
       </Card>
     </div>
   );

@@ -50,9 +50,12 @@ service cloud.firestore {
       return hasRole('technician');
     }
 
-    function managesCategory(category) {
-      return isManager()
-        && currentUser().category == category;
+    // Routing rules exist once an administrator has set them up (PB-13).
+    // Before that, managers see their own category's records.
+    function routingConfigured() {
+      return exists(
+        /databases/$(database)/documents/settings/routing
+      );
     }
 
     // -----------------------------------------
@@ -126,13 +129,51 @@ service cloud.firestore {
     }
 
     // -----------------------------------------
+    // CATEGORIES (routing rules)
+    // -----------------------------------------
+
+    match /categories/{categoryId} {
+
+      // All active users can view categories.
+      allow get, list: if isActiveUser();
+
+      // Only Cloud Functions manage categories.
+      allow create, update, delete: if false;
+    }
+
+    // -----------------------------------------
+    // SETTINGS (routing flag, support contact)
+    // -----------------------------------------
+
+    match /settings/{settingId} {
+
+      allow get: if isActiveUser();
+
+      // Only Cloud Functions manage settings.
+      allow list, create, update, delete: if false;
+    }
+
+    // -----------------------------------------
+    // ASSETS
+    // -----------------------------------------
+
+    match /assets/{assetId} {
+
+      // Staff (not requesters) can view assets.
+      allow get, list: if isActiveUser() && !isRequester();
+
+      // Only Cloud Functions manage assets.
+      allow create, update, delete: if false;
+    }
+
+    // -----------------------------------------
     // MAINTENANCE REQUESTS
     // -----------------------------------------
 
     match /requests/{requestId} {
 
       // Requesters can read their own requests.
-      // Managers can read requests in their category.
+      // Managers can read requests routed to them.
       // Administrators can read all requests.
 
       allow get, list: if isActiveUser()
@@ -147,8 +188,15 @@ service cloud.firestore {
 
           || (
             isManager()
-            && resource.data.routedCategory
-              == currentUser().category
+            && (
+              resource.data.get('routedManagerId', null)
+                == request.auth.uid
+              || (
+                !routingConfigured()
+                && resource.data.routedCategory
+                  == currentUser().category
+              )
+            )
           )
         );
 
@@ -164,7 +212,7 @@ service cloud.firestore {
     match /workOrders/{workOrderId} {
 
       // Administrators can read all work orders.
-      // Managers can read work orders in their category.
+      // Managers can read work orders they own.
       // Technicians can read assigned work orders.
 
       allow get, list: if isActiveUser()
@@ -173,8 +221,15 @@ service cloud.firestore {
 
           || (
             isManager()
-            && resource.data.category
-              == currentUser().category
+            && (
+              resource.data.get('managerId', null)
+                == request.auth.uid
+              || (
+                !routingConfigured()
+                && resource.data.category
+                  == currentUser().category
+              )
+            )
           )
 
           || (

@@ -29,6 +29,7 @@ export default function PriorityLevels() {
   const [editing, setEditing] = useState(() => ({ ...priorities[0] }));
   const [errors, setErrors] = useState({});
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [blocked, setBlocked] = useState(null);
   const [busy, setBusy] = useState(false);
 
   // Levels arrive from Firestore after the first render; keep the form pointed at a real level.
@@ -78,6 +79,20 @@ export default function PriorityLevels() {
       toast(`${p.name} deleted`);
       const next = priorities.find((x) => x.id !== p.id);
       if (next) select(next);
+    } catch (err) {
+      // In use: offer deactivation instead (PB-39).
+      if (/inactive instead/i.test(err.message) && p.active) setBlocked(p);
+      else toast(err.message, 'error');
+    }
+  };
+
+  const deactivate = async (p) => {
+    setBlocked(null);
+    try {
+      const { isNew, ...level } = p;
+      await savePriority({ ...level, active: false });
+      if (editing.id === p.id) setEditing((e) => ({ ...e, active: false }));
+      toast(`${p.name} deactivated. Existing requests and work orders keep it.`);
     } catch (err) {
       toast(err.message, 'error');
     }
@@ -213,6 +228,16 @@ export default function PriorityLevels() {
           actions={<><Button variant="secondary" onClick={() => setConfirmDelete(null)}>Cancel</Button><Button variant="danger" icon="trash" onClick={() => remove(confirmDelete)}>Delete</Button></>}
         >
           <p>Levels already used by requests or work orders can't be deleted. Mark them inactive instead, so they stop being offered for new work.</p>
+        </Modal>
+      )}
+
+      {blocked && (
+        <Modal
+          title={`"${blocked.name}" is in use`}
+          onClose={() => setBlocked(null)}
+          actions={<><Button variant="secondary" onClick={() => setBlocked(null)}>Keep it</Button><Button onClick={() => deactivate(blocked)}>Deactivate instead</Button></>}
+        >
+          <p>Requests or work orders already use this priority, so it can't be deleted. Deactivating it stops it being offered for new requests and AI recommendations, while existing records keep it.</p>
         </Modal>
       )}
     </div>

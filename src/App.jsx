@@ -22,6 +22,10 @@ import ManagerCalendar from './pages/manager/Calendar.jsx';
 import Triage from './pages/manager/Triage.jsx';
 import TechnicianCalendar from './pages/technician/Calendar.jsx';
 import Team from './pages/manager/Team.jsx';
+import Categories from './pages/admin/Categories.jsx';
+import Help from './pages/requester/Help.jsx';
+import SystemSettings from './pages/admin/SystemSettings.jsx';
+import RoutingRules from './pages/admin/RoutingRules.jsx';
 
 function HomeRedirect() {
   const { user, loading, authError } = useAuth();
@@ -63,7 +67,7 @@ export default function App() {
         <Route path="requests" element={<MyRequests />} />
         <Route path="requests/:id" element={<RequestDetail />} />
         <Route path="notifications" element={<Notifications />} />
-        <Route path="help" element={soon('Help & Support', 'FAQs and contact options for facilities support.')} />
+        <Route path="help" element={<Help />} />
       </Route>
 
       <Route path="/manager" element={<AppLayout role="manager" />}>
@@ -98,11 +102,12 @@ export default function App() {
         <Route path="dashboard" element={soon('Dashboard', 'System-wide activity and configuration health.')} />
         <Route path="users" element={<UsersRoles />} />
         <Route path="reports" element={soon('Reports', 'Organization-wide maintenance reporting.')} />
-        <Route path="categories" element={soon('Categories', 'Maintenance categories used by the AI and routing rules.')} />
+        <Route path="categories" element={<Categories />} />
         <Route path="trades" element={soon('Trades', 'Technician trades and skills.')} />
-        <Route path="routing-rules" element={soon('Routing Rules', 'Rules that route requests to the right manager.')} />
+        <Route path="routing-rules" element={<RoutingRules />} />
         <Route path="locations" element={<Locations />} />
-        <Route path="system-settings" element={soon('System Settings', 'Organization-wide settings.')} />
+        <Route path="assets" element={<Assets />} />
+        <Route path="system-settings" element={<SystemSettings />} />
         <Route path="audit-logs" element={soon('Audit Logs', 'A record of changes made in the system.')} />
       </Route>
 

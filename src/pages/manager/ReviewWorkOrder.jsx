@@ -6,7 +6,9 @@ import {
 } from '../../components/ui.jsx';
 import { useStore } from '../../context/StoreContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
-import { CATEGORIES, TRADES } from '../../data/mock.js';
+import { TRADES } from '../../data/mock.js';
+import ReviewHistory from '../../components/ReviewHistory.jsx';
+import { reviewChanges, reviewOutcome, withCurrent } from '../../data/review.js';
 import { fmtDateTime } from '../../data/format.js';
 import { tradesMatch } from '../../data/trades.js';
 
@@ -23,19 +25,20 @@ const CHIP_BY_PRIORITY = { Critical: 'chip-red', High: 'chip-red', Medium: 'chip
 
 export default function ReviewWorkOrder() {
   const { id } = useParams();
-  const { requests, technicians, approveRequest, rejectRequest, updateRequest, priorityNames } = useStore();
+  const { requests, technicians, approveRequest, rejectRequest, updateRequest, priorityNames, categoryNames } = useStore();
   const toast = useToast();
   const navigate = useNavigate();
   const r = requests.find((x) => x.id === id);
 
   const [form, setForm] = useState(() => ({
-    category: r?.ai?.category || '',
+    category: r?.routedCategory || r?.ai?.category || '',
     priority: r?.priority || 'Medium',
     trade: standardTrade(r?.ai?.trade),
     safety: r?.safety ? 'Yes' : 'No',
     title: r ? `Inspect and service: ${r.description.split('.')[0].slice(0, 60)}` : '',
     description: r?.ai?.suggestedAction || '',
     notes: '',
+    note: '',
     technicianId: technicians.find((t) => tradesMatch(t.trade, r?.ai?.trade))?.id || '',
   }));
   // Requests and technicians may arrive after this component first renders.
@@ -45,8 +48,8 @@ export default function ReviewWorkOrder() {
       ...previous,
       category: r.routedCategory || r.ai?.category || '',
       priority: r.priority || r.ai?.priority || 'Medium',
-      trade: standardTrade(r.ai?.trade),
-      safety: r.safety || r.ai?.safetyFlag ? 'Yes' : 'No',
+      trade: standardTrade(r.reviewedTrade || r.ai?.trade),
+      safety: (r.safety ?? r.ai?.safetyFlag) ? 'Yes' : 'No',
       title: `Inspect and service: ${(r.description || '').split('.')[0].slice(0, 60)}`,
       description: r.ai?.suggestedAction || r.description || '',
       technicianId: technicians.find((t) => tradesMatch(t.trade, r.ai?.trade))?.id || '',
@@ -57,6 +60,7 @@ export default function ReviewWorkOrder() {
   const [rejecting, setRejecting] = useState(false);
   const [showFull, setShowFull] = useState(false);
   const [rejectNote, setRejectNote] = useState('');
+  const [savedAt, setSavedAt] = useState(0);
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
   if (!r) {
@@ -75,8 +79,14 @@ export default function ReviewWorkOrder() {
     return Object.keys(e).length === 0;
   };
 
+  const categoryChanged = r && String(form.category || '').trim().toLowerCase() !== String(r.routedCategory || '').trim().toLowerCase();
+
   const approve = async () => {
     if (!validate()) return;
+    if (categoryChanged) {
+      toast('You changed the category. Save Changes first: the request may move to another manager.', 'error');
+      return;
+    }
     try { const woId = await approveRequest(r.id, {
       title: form.title.trim(),
       description: form.description.trim(),
@@ -93,8 +103,11 @@ export default function ReviewWorkOrder() {
 
   const save = async () => {
     try {
-      await updateRequest(r.id, { priority: form.priority, safety: form.safety === 'Yes', ai: { ...(r.ai || {}), category: form.category, trade: form.trade } });
-      toast('Changes saved');
+      const outcome = reviewOutcome(await updateRequest(r.id, reviewChanges(form)));
+      toast(outcome.message);
+      setForm((f) => ({ ...f, note: '' }));
+      setSavedAt(Date.now());
+      if (outcome.moved) navigate('/manager/queue');
     } catch (err) { toast(err.message, 'error'); }
   };
 
@@ -125,8 +138,8 @@ export default function ReviewWorkOrder() {
           <Card title={<>Work Order Details <span style={{ fontWeight: 400, color: 'var(--muted)' }}>(Edit if needed)</span></>} icon="edit">
             <fieldset disabled={locked} style={{ border: 'none' }} className="stack gap-12">
               <div className="form-grid-2">
-                <Field label="Category" required><Select options={CATEGORIES} value={form.category} onChange={set('category')} /></Field>
-                <Field label="Priority" required><Select options={priorityNames} value={form.priority} onChange={set('priority')} /></Field>
+                <Field label="Category" required hint={categoryChanged ? 'Save Changes to reroute before approving.' : undefined}><Select options={withCurrent(categoryNames, r.routedCategory)} value={form.category} onChange={set('category')} /></Field>
+                <Field label="Priority" required><Select options={withCurrent(priorityNames, r.priority)} value={form.priority} onChange={set('priority')} /></Field>
                 <Field label="Trade" required error={errors.trade}><Select placeholder="Select a trade" options={TRADES} value={form.trade} onChange={set('trade')} invalid={!!errors.trade} /></Field>
                 <Field label="Safety Flag" required><Select options={['No', 'Yes']} value={form.safety} onChange={set('safety')} /></Field>
               </div>
@@ -151,6 +164,12 @@ export default function ReviewWorkOrder() {
               <div className="info-card" style={{ alignSelf: 'end' }}><Icon name="calendar" size={22} /><div style={{ fontSize: 14 }}>Service date and time are set from the Calendar after approval, where technician conflicts are checked.</div></div>
             </fieldset>
           </Card>
+
+          {!locked && (
+            <Field label="Reason for changes (optional)" hint="Saved in History when you click Save Changes. Not shown to the requester.">
+              <Textarea rows={2} style={{ minHeight: 44 }} maxLength={1000} placeholder="e.g. Thermostat issue, not electrical" value={form.note} onChange={set('note')} />
+            </Field>
+          )}
 
           {locked ? (
             <div className="info-card"><Icon name="info" size={22} /><div className="info-text" style={{ marginTop: 0 }}>This request is <strong>{r.status}</strong>{r.workOrderId ? ` (work order ${r.workOrderId})` : ''}. It can no longer be edited here.</div></div>
@@ -177,6 +196,10 @@ export default function ReviewWorkOrder() {
               <dt style={{ color: 'var(--text-2)' }}>Safety Flag</dt><dd><span className={`chip ${r.ai?.safetyFlag ? 'chip-red' : 'chip-green'}`}>{r.ai?.safetyFlag ? 'Yes' : 'No'}</span></dd>
             </dl>
           </section>
+
+          <Card title="Review History" icon="history">
+            <ReviewHistory request={r} refreshKey={`${savedAt}-${r.updatedAt?.seconds || ''}`} />
+          </Card>
 
           <Card title="Request History" icon="history">
             <div className="stack">

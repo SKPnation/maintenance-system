@@ -171,4 +171,3 @@ export const NOTIFICATIONS = [
   { id: 'n13', type: 'Work Orders', icon: 'clock', title: 'Request Under Review', text: 'MR-2026-0043 is being reviewed by the facilities team.', at: '2026-08-28T09:00:00', ago: '1 week ago', read: false, roles: ['requester'] },
 ];
 
-export const EMERGENCY_PHONE = '(555) 123-4567';

@@ -12,6 +12,8 @@ const {getFirestore, FieldValue} = require("firebase-admin/firestore");
 const OpenAI = require("openai");
 const workflow = require("./workflow");
 const priorities = require("./priorities");
+const routing = require("./routing");
+const assets = require("./assets");
 
 initializeApp();
 
@@ -117,7 +119,7 @@ async function requireAdmin(request) {
 async function requireManager(request) {
   const user = await getActiveUser(request);
 
-  if (user.role !== "manager" || !user.category) {
+  if (user.role !== "manager") {
     throw new HttpsError(
         "permission-denied",
         "An active category manager account is required.",
@@ -140,10 +142,22 @@ async function requireTechnician(request) {
   return user;
 }
 
-// Managers see work orders in their category; technicians see only their own.
+// Once routing is set up, records name their owning manager. Older records
+// (before routing) fall back to the manager's own category.
+function managesRequest(record, manager) {
+  if (Object.hasOwn(record, "routedManagerId")) return record.routedManagerId === manager.uid;
+  return Boolean(manager.category) && record.routedCategory === manager.category;
+}
+
+function managesWorkOrder(workOrder, manager) {
+  if (Object.hasOwn(workOrder, "managerId")) return workOrder.managerId === manager.uid;
+  return Boolean(manager.category) && workOrder.category === manager.category;
+}
+
+// Managers see the work orders they own; technicians see only their own.
 function ensureWorkOrderAccess(user, workOrder) {
   const allowed =
-    (user.role === "manager" && user.category && workOrder.category === user.category) ||
+    (user.role === "manager" && managesWorkOrder(workOrder, user)) ||
     (user.role === "technician" && workOrder.technicianId === user.uid);
 
   if (!allowed) {
@@ -171,10 +185,10 @@ function requestHistory(type, details = {}) {
 }
 
 function ensureManagerCategory(record, manager) {
-  if (record.routedCategory !== manager.category) {
+  if (!managesRequest(record, manager)) {
     throw new HttpsError(
         "permission-denied",
-        "This request belongs to another manager category.",
+        "This request is routed to another manager.",
     );
   }
 }
@@ -240,8 +254,9 @@ async function createUser(payload) {
 
   const role = validateRole(payload.role);
 
+  // Optional: routing rules assign categories to managers (PB-13).
   const category = role === "manager" ?
-        nonemptyString(payload.category, "category") :
+        optionalString(payload.category, "category") :
         "";
 
   const trade = role === "technician" ?
@@ -348,20 +363,9 @@ async function updateUser(payload, callerUid) {
         updates.active :
         snapshot.get("active");
 
-  const resultingCategory = updates.category !== undefined ?
-        updates.category :
-        snapshot.get("category");
-
   const resultingTrade = updates.trade !== undefined ?
         updates.trade :
         snapshot.get("trade");
-
-  if (resultingRole === "manager" && !resultingCategory) {
-    throw new HttpsError(
-        "invalid-argument",
-        "A manager must have a managed category.",
-    );
-  }
 
   if (resultingRole === "technician" && !resultingTrade) {
     throw new HttpsError(
@@ -643,7 +647,14 @@ async function submitRequest(payload, request) {
 // MANAGER: SAVE REVIEW CHANGES
 // ============================================================
 
-function validateReviewChanges(changes, category, levels) {
+const REVIEW_LABELS = {
+  routedCategory: "Category",
+  priority: "Priority",
+  reviewedTrade: "Trade",
+  safety: "Safety flag",
+};
+
+function validateReviewChanges(changes) {
   if (
     !changes ||
         typeof changes !== "object" ||
@@ -655,63 +666,33 @@ function validateReviewChanges(changes, category, levels) {
     );
   }
 
-  const result = {};
+  const ai = changes.ai && typeof changes.ai === "object" && !Array.isArray(changes.ai) ? changes.ai : {};
+  const fields = {};
 
-  if (changes.priority !== undefined) {
-    result.priority = priorities.validatePriorityName(changes.priority, levels);
-  }
+  const category = changes.category !== undefined ? changes.category : ai.category;
+  if (category !== undefined) fields.routedCategory = nonemptyString(category, "category", 60);
 
-  if (changes.safety !== undefined) {
-    result.safety = validateBoolean(changes.safety, "safety");
-  }
+  if (changes.priority !== undefined) fields.priority = nonemptyString(changes.priority, "priority", 40);
 
-  if (changes.ai !== undefined) {
-    if (
-      !changes.ai ||
-            typeof changes.ai !== "object" ||
-            Array.isArray(changes.ai)
-    ) {
-      throw new HttpsError(
-          "invalid-argument",
-          "Invalid AI review details.",
-      );
-    }
+  if (changes.safety !== undefined) fields.safety = validateBoolean(changes.safety, "safety");
 
-    if (
-      changes.ai.category !== undefined &&
-            changes.ai.category !== category
-    ) {
-      throw new HttpsError(
-          "permission-denied",
-          "Changing categories requires administrator rerouting.",
-      );
-    }
+  const trade = changes.trade !== undefined ? changes.trade : ai.trade;
+  if (trade !== undefined) fields.reviewedTrade = nonemptyString(trade, "trade", 100);
 
-    if (changes.ai.trade !== undefined) {
-      result.reviewedTrade = nonemptyString(
-          changes.ai.trade,
-          "trade",
-          100,
-      );
-    }
-  }
-
-  return result;
+  return {fields, note: optionalString(changes.note, "note", 1000)};
 }
 
 async function updateManagerRequest(payload, request) {
   const manager = await requireManager(request);
   const id = nonemptyString(payload.id, "request ID", 128);
+  const {fields, note} = validateReviewChanges(payload.changes);
 
-  const changes = validateReviewChanges(
-      payload.changes,
-      manager.category,
-      await loadPriorityLevels(),
-  );
+  const [levels, route] = await Promise.all([loadPriorityLevels(), loadRouting()]);
 
   const ref = db.collection("requests").doc(id);
+  const historyRef = ref.collection("reviewHistory").doc();
 
-  await db.runTransaction(async (transaction) => {
+  const result = await db.runTransaction(async (transaction) => {
     const snapshot = await transaction.get(ref);
 
     if (!snapshot.exists) {
@@ -723,14 +704,75 @@ async function updateManagerRequest(payload, request) {
     ensureManagerCategory(data, manager);
     ensurePendingReview(data);
 
+    const current = {
+      routedCategory: data.routedCategory || "",
+      priority: data.priority || "",
+      reviewedTrade: data.reviewedTrade || (data.ai && data.ai.trade) || "",
+      safety: data.safety === true,
+    };
+
+    const changes = [];
+    const updates = {};
+    let reroute = null;
+
+    for (const [field, value] of Object.entries(fields)) {
+      const same = field === "routedCategory" ?
+        routing.normalize(value) === routing.normalize(current.routedCategory) :
+        value === current[field];
+
+      if (same) continue;
+
+      // Existing records may keep an inactive priority; only new choices must be active.
+      if (field === "priority") {
+        updates.priority = priorities.validatePriorityName(value, levels);
+      } else if (field === "routedCategory") {
+        const target = routing.resolveRoute(value, route.categories);
+
+        updates.routedCategory = target.category;
+        updates.routingReason = target.reason;
+
+        if (route.configured) updates.routedManagerId = target.managerId;
+
+        reroute = {
+          requested: value,
+          fromCategory: current.routedCategory,
+          toCategory: target.category,
+          reason: target.reason,
+          movedQueue: route.configured ? target.managerId !== manager.uid : routing.normalize(target.category) !== routing.normalize(manager.category),
+        };
+      } else {
+        updates[field] = value;
+      }
+
+      changes.push({field, label: REVIEW_LABELS[field], from: current[field], to: updates[field]});
+    }
+
+    if (!changes.length && !note) {
+      return {unchanged: true};
+    }
+
+    const now = FieldValue.serverTimestamp();
+
     transaction.update(ref, {
-      ...changes,
+      ...updates,
       reviewedBy: manager.uid,
-      updatedAt: FieldValue.serverTimestamp(),
+      updatedAt: now,
     });
+
+    // Internal log: the original AI recommendation stays untouched on the request.
+    transaction.create(historyRef, {
+      changes,
+      note,
+      reroute,
+      changedBy: manager.uid,
+      changedByName: manager.name || "",
+      changedAt: now,
+    });
+
+    return {unchanged: false, reroute};
   });
 
-  return {success: true, id};
+  return {success: true, id, ...result};
 }
 
 // ============================================================
@@ -799,13 +841,6 @@ async function approveManagerRequest(payload, request) {
     );
   }
 
-  if (input.category !== manager.category) {
-    throw new HttpsError(
-        "permission-denied",
-        "The work order must belong to your managed category.",
-    );
-  }
-
   const title = nonemptyString(input.title, "title", 200);
 
   const description = nonemptyString(
@@ -815,7 +850,8 @@ async function approveManagerRequest(payload, request) {
   );
 
   const trade = nonemptyString(input.trade, "trade", 100);
-  const priority = priorities.validatePriorityName(input.priority, await loadPriorityLevels());
+  const requestedPriority = nonemptyString(input.priority, "priority", 40);
+  const levels = await loadPriorityLevels();
   const safety = validateBoolean(input.safety, "safety");
 
   const technicianId = optionalString(
@@ -851,6 +887,20 @@ async function approveManagerRequest(payload, request) {
     ensureManagerCategory(original, manager);
     ensurePendingReview(original);
 
+    const category = original.routedCategory || manager.category || routing.FALLBACK_CATEGORY;
+
+    // A request may keep a priority that has since been deactivated (PB-39).
+    const priority = requestedPriority === original.priority ?
+      original.priority :
+      priorities.validatePriorityName(requestedPriority, levels);
+
+    if (input.category !== undefined && routing.normalize(input.category) !== routing.normalize(category)) {
+      throw new HttpsError(
+          "failed-precondition",
+          "Change the category with Save changes first; the request may move to another manager.",
+      );
+    }
+
     if (technicianRef) {
       validateTechnician(technicianSnapshot, trade);
     }
@@ -864,7 +914,8 @@ async function approveManagerRequest(payload, request) {
       fullTitle: title,
       description,
 
-      category: manager.category,
+      category,
+      ...(Object.hasOwn(original, "routedManagerId") ? {managerId: manager.uid} : {}),
       trade,
       priority,
       safety,
@@ -906,7 +957,7 @@ async function approveManagerRequest(payload, request) {
       workOrderId: workOrderRef.id,
       workOrderStatus: technicianId ? "Assigned" : "Unassigned",
       workOrderStatusUpdatedAt: now,
-      assignedCategory: manager.category,
+      assignedCategory: category,
       history: requestHistory("approved"),
 
       priority,
@@ -948,7 +999,7 @@ async function assignTechnician(payload, request) {
 
     const workOrder = {id, ...snapshot.data()};
 
-    if (workOrder.category !== manager.category) {
+    if (!managesWorkOrder(workOrder, manager)) {
       throw new HttpsError("permission-denied", "This work order belongs to another category.");
     }
 
@@ -1035,7 +1086,7 @@ async function scheduleWorkOrder(payload, request) {
 
     const workOrder = {id, ...snapshot.data()};
 
-    if (workOrder.category !== manager.category) {
+    if (!managesWorkOrder(workOrder, manager)) {
       throw new HttpsError("permission-denied", "This work order belongs to another category.");
     }
 
@@ -1437,6 +1488,375 @@ async function deletePriorityLevel(payload) {
 }
 
 // ============================================================
+// ROUTING (PB-13)
+// ============================================================
+
+async function routingConfigured() {
+  const settings = await db.collection("settings").doc("routing").get();
+  return settings.exists;
+}
+
+// Categories used for routing. Before an administrator sets up routing, fall
+// back to the managers' own (legacy) categories.
+async function loadRouting() {
+  if (await routingConfigured()) {
+    const snapshot = await db.collection("categories").get();
+    return {configured: true, categories: snapshot.docs.map((doc) => ({id: doc.id, ...doc.data()}))};
+  }
+
+  const managers = await db.collection("users")
+      .where("role", "==", "manager")
+      .where("active", "==", true)
+      .get();
+
+  const categories = [];
+
+  for (const doc of managers.docs) {
+    const name = doc.get("category");
+
+    if (typeof name === "string" && name.trim() && !categories.some((c) => routing.normalize(c.name) === routing.normalize(name))) {
+      categories.push({name: name.trim(), active: true, managerId: doc.id});
+    }
+  }
+
+  if (!categories.some((c) => routing.isFallback(c.name))) {
+    categories.push({name: routing.FALLBACK_CATEGORY, active: true, managerId: ""});
+  }
+
+  return {configured: false, categories};
+}
+
+async function validateManagerId(managerId) {
+  if (!managerId) return "";
+
+  const snapshot = await db.collection("users").doc(managerId).get();
+
+  if (!snapshot.exists || snapshot.get("role") !== "manager" || snapshot.get("active") !== true) {
+    throw new HttpsError("invalid-argument", "Choose an active Category Manager.");
+  }
+
+  return managerId;
+}
+
+async function categoryInUse(name) {
+  const [requests, workOrders] = await Promise.all([
+    db.collection("requests").where("routedCategory", "==", name).limit(1).get(),
+    db.collection("workOrders").where("category", "==", name).limit(1).get(),
+  ]);
+
+  return !requests.empty || !workOrders.empty;
+}
+
+async function writeInChunks(updates) {
+  for (let i = 0; i < updates.length; i += 400) {
+    const batch = db.batch();
+    updates.slice(i, i + 400).forEach(([ref, data]) => batch.update(ref, data));
+    await batch.commit();
+  }
+}
+
+// Give existing requests and work orders an owning manager under the new rules.
+async function backfillRouting(categories) {
+  const [requests, workOrders] = await Promise.all([
+    db.collection("requests").get(),
+    db.collection("workOrders").get(),
+  ]);
+
+  const updates = [];
+
+  for (const doc of requests.docs) {
+    const data = doc.data();
+
+    if (!data.routedCategory) continue; // Not analyzed yet; the AI step routes it.
+
+    const route = routing.resolveRoute(data.routedCategory, categories);
+    const pending = data.analysisStatus === "completed" &&
+      ["submitted", "Pending Review"].includes(data.status) &&
+      !data.workOrderId;
+
+    const update = {routedManagerId: route.managerId};
+
+    // Only requests still waiting for review move to General Maintenance.
+    if (pending && route.category !== data.routedCategory) {
+      update.routedCategory = route.category;
+      update.routingReason = route.reason;
+    }
+
+    updates.push([doc.ref, update]);
+  }
+
+  for (const doc of workOrders.docs) {
+    updates.push([doc.ref, {managerId: routing.resolveRoute(doc.get("category"), categories).managerId}]);
+  }
+
+  await writeInChunks(updates);
+
+  return {requests: requests.size, workOrders: workOrders.size};
+}
+
+// First-time setup: save the agreed categories and mappings, then route existing records.
+async function importRouting(payload, admin) {
+  const input = payload.categories;
+
+  if (!Array.isArray(input) || input.length < 1 || input.length > 50) {
+    throw new HttpsError("invalid-argument", "Provide between 1 and 50 categories.");
+  }
+
+  const categories = input.map((category) => routing.validateCategory(category));
+
+  if (new Set(categories.map((c) => c.normalizedName)).size !== categories.length) {
+    throw new HttpsError("invalid-argument", "Category names must be unique.");
+  }
+
+  if (!categories.some((c) => routing.isFallback(c.name))) {
+    throw new HttpsError("invalid-argument", `Include the ${routing.FALLBACK_CATEGORY} fallback category.`);
+  }
+
+  for (const category of categories) {
+    category.managerId = await validateManagerId(category.managerId);
+  }
+
+  const settingsRef = db.collection("settings").doc("routing");
+  const collection = db.collection("categories");
+
+  await db.runTransaction(async (transaction) => {
+    const settings = await transaction.get(settingsRef);
+
+    if (settings.exists) {
+      throw new HttpsError("failed-precondition", "Routing is already set up.");
+    }
+
+    const now = FieldValue.serverTimestamp();
+
+    categories.forEach((category, index) => {
+      transaction.create(collection.doc(), {...category, rank: index + 1, createdAt: now, updatedAt: now});
+    });
+
+    transaction.create(settingsRef, {
+      fallbackCategory: routing.FALLBACK_CATEGORY,
+      configuredBy: admin.uid,
+      configuredAt: now,
+    });
+  });
+
+  const counts = await backfillRouting(categories);
+
+  return {success: true, count: categories.length, routed: counts};
+}
+
+async function saveCategory(payload) {
+  if (!(await routingConfigured())) {
+    throw new HttpsError("failed-precondition", "Set up routing with the default categories first.");
+  }
+
+  const data = routing.validateCategory(payload);
+  const id = optionalString(payload.id, "category ID", 128);
+
+  data.managerId = await validateManagerId(data.managerId);
+
+  const snapshot = await db.collection("categories").get();
+  const saved = snapshot.docs.map((doc) => ({id: doc.id, ...doc.data()}));
+
+  if (saved.some((c) => c.id !== id && c.normalizedName === data.normalizedName)) {
+    throw new HttpsError("already-exists", "A category with this name already exists.");
+  }
+
+  const now = FieldValue.serverTimestamp();
+
+  if (id) {
+    const current = saved.find((c) => c.id === id);
+
+    if (!current) {
+      throw new HttpsError("not-found", "Category not found.");
+    }
+
+    if (routing.isFallback(current.name) && !routing.isFallback(data.name)) {
+      throw new HttpsError("failed-precondition", `${routing.FALLBACK_CATEGORY} is the fallback category and can't be renamed.`);
+    }
+
+    // Requests and work orders store the category by name.
+    if (current.name !== data.name && await categoryInUse(current.name)) {
+      throw new HttpsError(
+          "failed-precondition",
+          `"${current.name}" is already used by requests or work orders, so it can't be renamed. Deactivate it and add a new category instead.`,
+      );
+    }
+
+    await db.collection("categories").doc(id).update({...data, updatedAt: now});
+
+    return {success: true, id};
+  }
+
+  const rank = Math.max(0, ...saved.map((c) => Number(c.rank) || 0)) + 1;
+  const ref = await db.collection("categories").add({...data, rank, createdAt: now, updatedAt: now});
+
+  return {success: true, id: ref.id};
+}
+
+// ============================================================
+// MANAGER: REVIEW HISTORY (PB-04)
+// ============================================================
+
+async function listReviewHistory(payload, request) {
+  const user = await getActiveUser(request);
+  const id = nonemptyString(payload.id, "request ID", 128);
+  const ref = db.collection("requests").doc(id);
+  const snapshot = await ref.get();
+
+  if (!snapshot.exists) {
+    throw new HttpsError("not-found", "Request not found.");
+  }
+
+  const data = snapshot.data();
+
+  if (!(user.role === "admin" || (user.role === "manager" && managesRequest(data, user)))) {
+    throw new HttpsError("permission-denied", "You do not have access to this request's review history.");
+  }
+
+  const history = await ref.collection("reviewHistory").orderBy("changedAt", "asc").get();
+
+  return {
+    original: {
+      description: data.description || "",
+      location: data.location || "",
+      submittedAt: toIso(data.createdAt),
+      ai: data.ai ? {...data.ai, analyzedAt: toIso(data.ai.analyzedAt)} : null,
+    },
+    entries: history.docs.map((doc) => {
+      const entry = doc.data();
+
+      return {
+        id: doc.id,
+        changes: entry.changes || [],
+        note: entry.note || "",
+        reroute: entry.reroute || null,
+        changedByName: entry.changedByName || "",
+        changedAt: toIso(entry.changedAt),
+      };
+    }),
+  };
+}
+
+// ============================================================
+// ADMIN: ASSETS (PB-20)
+// ============================================================
+
+async function resolveAssetLocation(fields) {
+  const building = await db.collection("buildings").doc(fields.buildingId).get();
+
+  if (!building.exists) {
+    throw new HttpsError("invalid-argument", "Select a valid building.");
+  }
+
+  let roomName = "";
+
+  if (fields.roomId) {
+    const room = await building.ref.collection("rooms").doc(fields.roomId).get();
+
+    if (!room.exists) {
+      throw new HttpsError("invalid-argument", "Select a valid room in that building.");
+    }
+
+    roomName = room.get("name") || "";
+  }
+
+  const buildingName = building.get("name") || "";
+
+  return {
+    building: buildingName,
+    room: roomName,
+    location: [buildingName, roomName].filter(Boolean).join(" - "),
+  };
+}
+
+async function createAsset(payload, admin) {
+  const tag = assets.normalizeTag(payload.tag);
+  const fields = assets.validateAssetFields(payload);
+  const location = await resolveAssetLocation(fields);
+  const ref = db.collection("assets").doc(tag);
+  const now = FieldValue.serverTimestamp();
+
+  await db.runTransaction(async (transaction) => {
+    const existing = await transaction.get(ref);
+
+    if (existing.exists) {
+      throw new HttpsError("already-exists", `Asset tag ${tag} is already in use.`);
+    }
+
+    transaction.create(ref, {
+      tag,
+      ...fields,
+      ...location,
+      createdBy: admin.uid,
+      updatedBy: admin.uid,
+      createdAt: now,
+      updatedAt: now,
+    });
+  });
+
+  return {success: true, id: tag};
+}
+
+async function updateAsset(payload, admin) {
+  const id = nonemptyString(payload.id, "asset ID", 64);
+
+  if (payload.tag !== undefined && assets.normalizeTag(payload.tag) !== id) {
+    throw new HttpsError("invalid-argument", "Asset tags can't be changed after creation.");
+  }
+
+  const fields = assets.validateAssetFields(payload);
+  const location = await resolveAssetLocation(fields);
+  const ref = db.collection("assets").doc(id);
+
+  await db.runTransaction(async (transaction) => {
+    const existing = await transaction.get(ref);
+
+    if (!existing.exists) {
+      throw new HttpsError("not-found", "Asset not found.");
+    }
+
+    transaction.update(ref, {
+      ...fields,
+      ...location,
+      updatedBy: admin.uid,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+  });
+
+  return {success: true, id};
+}
+
+// ============================================================
+// ADMIN: SUPPORT SETTINGS (PB-35)
+// ============================================================
+
+async function saveSupportSettings(payload, admin) {
+  const label = optionalString(payload.emergencyLabel, "contact name", 80);
+  const phone = optionalString(payload.emergencyPhone, "phone number", 30);
+  const verified = validateBoolean(payload.verified, "verified");
+  const routineInfo = optionalString(payload.routineInfo, "routine support details", 300);
+
+  if (phone && !/^[+()0-9 .-]{7,30}$/.test(phone)) {
+    throw new HttpsError("invalid-argument", "Enter a valid phone number.");
+  }
+
+  if (verified && phone.replace(/\D/g, "").length < 7) {
+    throw new HttpsError("invalid-argument", "Add the facilities phone number before marking it verified.");
+  }
+
+  await db.collection("settings").doc("support").set({
+    emergencyLabel: label,
+    emergencyPhone: phone,
+    verified,
+    routineInfo,
+    updatedBy: admin.uid,
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+
+  return {success: true};
+}
+
+// ============================================================
 // MAIN FIREBASE CALLABLE API
 // ============================================================
 
@@ -1495,6 +1915,25 @@ exports.maintenanceApi = onCall(
         case "deletePriorityLevel":
           await requireAdmin(request);
           return await deletePriorityLevel(payload);
+
+        case "importRouting":
+          return await importRouting(payload, await requireAdmin(request));
+
+        case "saveCategory":
+          await requireAdmin(request);
+          return await saveCategory(payload);
+
+        case "createAsset":
+          return await createAsset(payload, await requireAdmin(request));
+
+        case "updateAsset":
+          return await updateAsset(payload, await requireAdmin(request));
+
+        case "saveSupportSettings":
+          return await saveSupportSettings(payload, await requireAdmin(request));
+
+        case "listReviewHistory":
+          return await listReviewHistory(payload, request);
 
           // Requester actions
         case "submitRequest":
@@ -1582,22 +2021,8 @@ exports.analyzeNewMaintenanceRequest = onDocumentCreated(
 
       try {
         // Retrieve active manager categories.
-        const managerSnapshot = await db.collection("users")
-            .where("role", "==", "manager")
-            .where("active", "==", true)
-            .get();
-
-        const categories = [
-          ...new Set(
-              managerSnapshot.docs
-                  .map((snapshot) => snapshot.get("category"))
-                  .filter(
-                      (value) =>
-                        typeof value === "string" &&
-                                value.trim(),
-                  ),
-          ),
-        ];
+        const route = await loadRouting();
+        const categories = routing.activeCategoryNames(route.categories);
 
         const levels = await loadPriorityLevels();
 
@@ -1642,9 +2067,9 @@ exports.analyzeNewMaintenanceRequest = onDocumentCreated(
             completion.choices[0].message.content,
         );
 
-        const category = categories.includes(raw.category) ?
-                raw.category :
-                DEFAULT_CATEGORY;
+        // Shared routing lookup: unknown, inactive or unmapped -> General Maintenance.
+        const target = routing.resolveRoute(raw.category, route.categories);
+        const category = target.category;
 
         const confidence =
                 typeof raw.confidence === "number" &&
@@ -1667,11 +2092,13 @@ exports.analyzeNewMaintenanceRequest = onDocumentCreated(
 
         await ref.update({
           routedCategory: category,
+          routingReason: target.reason,
+          ...(route.configured ? {routedManagerId: target.managerId} : {}),
           priority,
           safety: safetyFlag,
 
           ai: {
-            category,
+            category: typeof raw.category === "string" ? raw.category.slice(0, 60) : category,
             trade,
             priority,
             safetyFlag,
@@ -1695,9 +2122,15 @@ exports.analyzeNewMaintenanceRequest = onDocumentCreated(
           error,
         });
 
+        const fallback = await loadRouting()
+            .then((route) => ({route, target: routing.resolveRoute(DEFAULT_CATEGORY, route.categories)}))
+            .catch(() => null);
+
         await ref.update({
           analysisStatus: "failed",
           routedCategory: DEFAULT_CATEGORY,
+          routingReason: "analysis_failed",
+          ...(fallback && fallback.route.configured ? {routedManagerId: fallback.target.managerId} : {}),
           aiError:
                     "Automatic analysis unavailable; manual review required.",
           updatedAt: FieldValue.serverTimestamp(),

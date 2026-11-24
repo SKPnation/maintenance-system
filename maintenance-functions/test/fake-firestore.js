@@ -159,6 +159,16 @@ class FakeFirestore {
   doc(path) {
     return new DocRef(this, path);
   }
+  batch() {
+    const writes = [];
+    return {
+      update: (ref, data) => writes.push(() => ref.update(data)),
+      set: (ref, data) => writes.push(() => ref.set(data)),
+      commit: async () => {
+        for (const write of writes) await write();
+      },
+    };
+  }
   async runTransaction(fn) {
     const snapshot = new Map(this.store);
     const tx = new Transaction(this);

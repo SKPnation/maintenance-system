@@ -246,20 +246,34 @@ export function Modal({ title, children, actions, onClose }) {
 }
 
 // ---------- Shared content blocks ----------
-export function SafetyCard({ phone, compact = false }) {
+// Urgent vs routine guidance (PB-35). Shows a phone number only when the team
+// has verified one; never a placeholder number or a broken call link.
+export function SafetyCard({ contact, compact = false, showRoutine = false }) {
+  const digits = String(contact?.phone || '').replace(/[^\d+]/g, '');
   return (
-    <section className={`sos ${compact ? 'sos-compact' : ''}`}>
+    <section className={`sos ${compact ? 'sos-compact' : ''}`} aria-label="Emergency guidance">
       <div className="sos-row">
         <div className="sos-icon"><Icon name="alertTriangle" size={26} strokeWidth={2} /></div>
         <div>
-          <h3 className="sos-title">Safety Emergency?</h3>
-          <p className="sos-text">For urgent safety issues (e.g. gas leak, fire, electrical hazard), please contact facilities immediately.</p>
+          <h3 className="sos-title">Safety emergency?</h3>
+          <p className="sos-text">
+            For urgent safety issues such as a gas smell, fire, flooding, sparking or exposed wiring, don't wait for an online request.
+            {' '}{contact ? `Call ${contact.label} now.` : 'Contact facilities using the emergency number posted in your building.'}
+            {' '}If anyone is in immediate danger, call 911.
+          </p>
         </div>
       </div>
-      <a className="sos-phone" href={`tel:${phone.replace(/\D/g, '')}`}>
-        <Icon name="phone" size={26} />
-        <span>{phone}</span>
-      </a>
+      {contact && digits.length >= 7 && (
+        <a className="sos-phone" href={`tel:${digits}`} aria-label={`Call ${contact.label}: ${contact.phone}`}>
+          <Icon name="phone" size={26} />
+          <span>{contact.phone}</span>
+        </a>
+      )}
+      {showRoutine && (
+        <p className="sos-text" style={{ marginTop: 0, color: 'var(--text-2)' }}>
+          <strong>Not urgent?</strong> Submit a maintenance request instead. It's routed to the right team and you can track it in My Requests.
+        </p>
+      )}
     </section>
   );
 }

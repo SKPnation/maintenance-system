@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import Icon from '../../components/Icon.jsx';
 import { Button, Card, EmptyState, Modal, PageHeader, PriorityPill, Select, StatusPill } from '../../components/ui.jsx';
 import { ScheduleForm, ScheduleHistory } from '../../components/Scheduling.jsx';
-import { useAuth } from '../../context/AuthContext.jsx';
+import { useManagerScope } from '../../data/managerScope.js';
 import { useStore } from '../../context/StoreContext.jsx';
 import { fmtDate, fmtHours, sameDay, toDate } from '../../data/format.js';
 
@@ -15,7 +15,7 @@ const timeLabel = (v) => toDate(v)?.toLocaleTimeString('en-US', { hour: 'numeric
 
 // Manager Calendar (PB-06): week of scheduled jobs plus assigned work still waiting for a time.
 export default function ManagerCalendar() {
-  const { user } = useAuth();
+  const { workOrders: scoped, label } = useManagerScope();
   const { workOrders = [], technicians = [] } = useStore();
   const [params, setParams] = useSearchParams();
   const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()));
@@ -23,7 +23,7 @@ export default function ManagerCalendar() {
   const [historyKey, setHistoryKey] = useState(0);
 
   const techName = (id) => technicians.find((t) => t.id === id)?.name || (id ? 'Technician' : 'Unassigned');
-  const mine = useMemo(() => workOrders.filter((w) => w.category === user?.category && (!techFilter || w.technicianId === techFilter)), [workOrders, user?.category, techFilter]);
+  const mine = useMemo(() => scoped.filter((w) => (!techFilter || w.technicianId === techFilter)), [scoped, techFilter]);
 
   const days = Array.from({ length: 7 }, (_, i) => { const d = new Date(weekStart); d.setDate(d.getDate() + i); return d; });
   const weekEnd = days[6];
@@ -40,7 +40,7 @@ export default function ManagerCalendar() {
     <div className="page-inner">
       <PageHeader
         title="Calendar"
-        subtitle={`Scheduled work for ${user?.category || 'your category'}. Select a job to schedule or reschedule it.`}
+        subtitle={`Scheduled work for ${label}. Select a job to schedule or reschedule it.`}
         actions={(
           <div className="row gap-12 wrap">
             <Select className="input-sm" style={{ width: 200 }} aria-label="Filter by technician" placeholder="All technicians" options={technicians.map((t) => ({ value: t.id, label: t.name }))} value={techFilter} onChange={(e) => setTechFilter(e.target.value)} />

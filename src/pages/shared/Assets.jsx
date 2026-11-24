@@ -5,6 +5,9 @@ import {
   Button, EmptyState, Input, KebabButton, Pagination, Pill, Select, StatCard, StatusPill, Tabs,
 } from '../../components/ui.jsx';
 import { useStore } from '../../context/StoreContext.jsx';
+import { useAuth } from '../../context/AuthContext.jsx';
+import AssetForm, { ASSET_STATUSES } from '../../components/AssetForm.jsx';
+import { configured } from '../../firebase.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { fmtDate } from '../../data/format.js';
 
@@ -12,7 +15,11 @@ const PAGE_SIZE = 10;
 
 export default function Assets() {
   const { assets } = useStore();
+  const { user } = useAuth();
   const toast = useToast();
+  // PB-20: only administrators create and edit asset records.
+  const canEdit = configured && user?.role === 'admin';
+  const [form, setForm] = useState(null);
   const [q, setQ] = useState('');
   const [category, setCategory] = useState('');
   const [status, setStatus] = useState('');
@@ -30,6 +37,7 @@ export default function Assets() {
   useEffect(() => { if (page > pageCount) setPage(1); }, [page, pageCount]);
   const rows = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const selected = assets.find((a) => a.id === selectedId);
+  useEffect(() => { if (!selected && assets[0]) setSelectedId(assets[0].id); }, [assets.length, selected]);
 
   return (
     <div className="page-inner">
@@ -48,11 +56,11 @@ export default function Assets() {
           <div className="filters">
             <Input className="grow" icon="search" placeholder="Search assets..." value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />
             <Select style={{ width: 150 }} options={[{ value: '', label: 'All Categories' }, ...categories]} value={category} onChange={(e) => { setCategory(e.target.value); setPage(1); }} aria-label="Category" />
-            <Select style={{ width: 150 }} options={[{ value: '', label: 'All Statuses' }, 'Operational', 'Needs Maintenance', 'Out of Service']} value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }} aria-label="Status" />
+            <Select style={{ width: 150 }} options={[{ value: '', label: 'All Statuses' }, ...ASSET_STATUSES]} value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }} aria-label="Status" />
           </div>
 
           {rows.length === 0 ? (
-            <div className="card"><EmptyState icon="box" title="No assets found" text="Try a different search or filter." /></div>
+            <div className="card"><EmptyState icon="box" title={assets.length ? 'No assets found' : 'No assets yet'} text={assets.length ? 'Try a different search or filter.' : canEdit ? 'Add the first asset record.' : 'An administrator can add asset records.'} /></div>
           ) : (
             <div className="table-wrap">
               <table className="table" style={{ fontSize: 13 }}>
@@ -69,7 +77,7 @@ export default function Assets() {
                       <td style={{ paddingRight: 0 }} onClick={(e) => e.stopPropagation()}>
                         <label className="checkbox"><input type="checkbox" checked={checked.includes(a.id)} onChange={() => setChecked((c) => (c.includes(a.id) ? c.filter((x) => x !== a.id) : [...c, a.id]))} aria-label={`Select ${a.tag}`} /><span className="checkbox-box"><Icon name="check" size={14} strokeWidth={3.5} /></span></label>
                       </td>
-                      <td style={{ paddingLeft: 0, paddingRight: 0 }}><img className="thumb" src={a.image} alt="" /></td>
+                      <td style={{ paddingLeft: 0, paddingRight: 0 }}>{a.image ? <img className="thumb" src={a.image} alt="" /> : <div className="thumb" />}</td>
                       <td style={{ whiteSpace: 'nowrap' }}>{a.tag}</td>
                       <td>{a.name}</td>
                       <td>{a.type}</td>
@@ -91,33 +99,48 @@ export default function Assets() {
 
         <section className="stack gap-16">
           <div className="row" style={{ justifyContent: 'flex-end', minHeight: 40 }}>
-            <Button icon="plus" onClick={() => toast('Asset creation form is not designed yet.', 'error')}>Add Asset</Button>
+            {canEdit && <Button icon="plus" onClick={() => setForm({ asset: null })}>Add Asset</Button>}
           </div>
-          {selected ? <AssetDetail key={selected.id} asset={selected} /> : <div className="card"><EmptyState title="Select an asset" /></div>}
+          {selected ? <AssetDetail key={selected.id} asset={selected} onEdit={canEdit ? () => setForm({ asset: selected }) : null} /> : <div className="card"><EmptyState title="Select an asset" /></div>}
         </section>
       </div>
+
+      {form && (
+        <AssetForm
+          asset={form.asset}
+          onClose={() => setForm(null)}
+          onSaved={(id) => {
+            toast(form.asset ? `${form.asset.tag} saved` : `${id} created`);
+            setForm(null);
+            if (id) setSelectedId(id);
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function AssetDetail({ asset: a }) {
+function AssetDetail({ asset: a, onEdit }) {
   const toast = useToast();
   const [tab, setTab] = useState('overview');
+  const upcoming = a.upcoming || [];
+  const history = a.history || [];
+  const documents = a.documents || [];
 
   return (
     <div className="card" style={{ padding: '18px 16px 16px' }}>
       <div className="asset-head">
-        <img className="photo asset-photo" src={a.image} alt={a.name} />
+        {a.image ? <img className="photo asset-photo" src={a.image} alt={a.name} /> : <div className="photo asset-photo" aria-hidden="true" />}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="row between">
             <div className="row gap-12"><span style={{ fontSize: 23, fontWeight: 700, letterSpacing: '-0.4px' }}>{a.tag}</span><StatusPill status={a.status} /></div>
-            <div className="row gap-12"><Button variant="ghost" size="sm" onClick={() => toast('Asset editing is not designed yet.', 'error')}>Edit</Button><KebabButton /></div>
+            <div className="row gap-12">{onEdit && <Button variant="ghost" size="sm" icon="edit" onClick={onEdit}>Edit</Button>}</div>
           </div>
           <div className="muted" style={{ fontSize: 14.5, marginTop: 4 }}>{a.name}</div>
           <div className="asset-meta">
             <span className="inline-icon"><Icon name="calendar" size={18} />{a.category}</span>
-            <span className="inline-icon"><Icon name="gear" size={18} />{a.brand} {a.model}</span>
-            <span className="inline-icon"><Icon name="barcode" size={18} />S/N: {a.serial}</span>
+            {(a.brand || a.model) && <span className="inline-icon"><Icon name="gear" size={18} />{a.brand} {a.model}</span>}
+            {a.serial && <span className="inline-icon"><Icon name="barcode" size={18} />S/N: {a.serial}</span>}
           </div>
           <div className="row gap-12" style={{ marginTop: 14, alignItems: 'flex-start' }}>
             <Icon name="mapPin" size={18} strokeWidth={2} />
@@ -139,13 +162,13 @@ function AssetDetail({ asset: a }) {
               <div className="box-title"><Icon name="clipboard" size={20} />Asset Details</div>
               <dl className="kv" style={{ gridTemplateColumns: '130px 1fr', fontSize: 14, gap: '8px 8px', marginTop: 14 }}>
                 <dt>Asset Tag</dt><dd>{a.tag}</dd>
-                <dt>Type</dt><dd>{a.name}</dd>
+                <dt>Type</dt><dd>{a.type || '—'}</dd>
                 <dt>Category</dt><dd>{a.category}</dd>
-                <dt>Brand</dt><dd>{a.brand}</dd>
-                <dt>Model</dt><dd>{a.model}</dd>
-                <dt>Serial Number</dt><dd>{a.serial}</dd>
-                <dt>Install Date</dt><dd>{fmtDate(a.installDate)}</dd>
-                <dt>Warranty Expiry</dt><dd>{fmtDate(a.warrantyExpiry)}</dd>
+                <dt>Brand</dt><dd>{a.brand || '—'}</dd>
+                <dt>Model</dt><dd>{a.model || '—'}</dd>
+                <dt>Serial Number</dt><dd>{a.serial || '—'}</dd>
+                <dt>Install Date</dt><dd>{a.installDate ? fmtDate(`${a.installDate}T00:00:00`) : '—'}</dd>
+                <dt>Warranty Expiry</dt><dd>{a.warrantyExpiry ? fmtDate(`${a.warrantyExpiry}T00:00:00`) : '—'}</dd>
                 <dt>Location</dt><dd>{a.location}</dd>
                 <dt>Status</dt><dd><StatusPill status={a.status} size="sm" /></dd>
               </dl>
@@ -158,7 +181,7 @@ function AssetDetail({ asset: a }) {
               <div className="divider" />
               <div className="box-title" style={{ fontSize: 13.5 }}><Icon name="shieldLoc" size={18} />QR Code</div>
               <div className="qr-row">
-                <QRCodeSVG value={a.tag} size={72} level="M" />
+                <QRCodeSVG value={a.tag || a.id} size={72} level="M" />
                 <Button variant="ghost" icon="printer" onClick={() => window.print()}>Print Label</Button>
               </div>
             </div>
@@ -167,7 +190,7 @@ function AssetDetail({ asset: a }) {
           <div className="asset-grid" style={{ marginTop: 14, gridTemplateColumns: '306px minmax(0,1fr)' }}>
             <div className="box">
               <div className="row between"><div className="box-title"><Icon name="calendar" size={20} />Upcoming Maintenance</div><span className="link" style={{ fontSize: 13.5 }}>View All</span></div>
-              {a.upcoming.length === 0 ? <p className="muted" style={{ fontSize: 13.5, marginTop: 14 }}>Nothing scheduled.</p> : a.upcoming.map((u) => (
+              {upcoming.length === 0 ? <p className="muted" style={{ fontSize: 13.5, marginTop: 14 }}>Nothing scheduled.</p> : upcoming.map((u) => (
                 <div key={u.title} className="row gap-12" style={{ alignItems: 'flex-start', marginTop: 16 }}>
                   <Icon name="infoCircle" size={16} style={{ color: 'var(--blue)', marginTop: 2 }} />
                   <div className="stack gap-8" style={{ fontSize: 13.5 }}>
@@ -181,7 +204,7 @@ function AssetDetail({ asset: a }) {
             <div className="box">
               <div className="row between"><div className="box-title"><Icon name="fileText" size={20} />Recent Work Orders</div><span className="link" style={{ fontSize: 13.5 }}>View All</span></div>
               <div style={{ marginTop: 14 }}>
-                {a.history.length === 0 ? <p className="muted" style={{ fontSize: 13.5 }}>No work orders yet.</p> : a.history.map((h) => (
+                {history.length === 0 ? <p className="muted" style={{ fontSize: 13.5 }}>No work orders yet.</p> : history.map((h) => (
                   <div key={h.id} className="rwo">
                     <div><div><span className="rwo-id">{h.id}</span><span className="rwo-date">{fmtDate(h.date)}</span></div><div className="rwo-desc">{h.desc}</div></div>
                     <StatusPill status={h.status} size="sm" />
@@ -195,14 +218,14 @@ function AssetDetail({ asset: a }) {
 
       {tab === 'history' && (
         <div className="stack gap-8" style={{ marginTop: 16 }}>
-          {a.history.filter((h) => h.status === 'Completed').length === 0
+          {history.filter((h) => h.status === 'Completed').length === 0
             ? <EmptyState icon="history" title="No maintenance history" />
-            : a.history.filter((h) => h.status === 'Completed').map((h) => <div key={h.id} className="note-item"><div className="tl-meta">{fmtDate(h.date)} · {h.id}</div>{h.desc}</div>)}
+            : history.filter((h) => h.status === 'Completed').map((h) => <div key={h.id} className="note-item"><div className="tl-meta">{fmtDate(h.date)} · {h.id}</div>{h.desc}</div>)}
         </div>
       )}
       {tab === 'wo' && (
         <div style={{ marginTop: 16 }}>
-          {a.history.length === 0 ? <EmptyState icon="fileText" title="No work orders" /> : a.history.map((h) => (
+          {history.length === 0 ? <EmptyState icon="fileText" title="No work orders" /> : history.map((h) => (
             <div key={h.id} className="rwo" style={{ padding: '10px 0', borderTop: '1px solid var(--line)' }}>
               <div><div><span className="rwo-id">{h.id}</span><span className="rwo-date">{fmtDate(h.date)}</span></div><div className="rwo-desc">{h.desc}</div></div>
               <StatusPill status={h.status} size="sm" />
@@ -211,7 +234,17 @@ function AssetDetail({ asset: a }) {
         </div>
       )}
       {tab === 'parts' && <EmptyState icon="inventory" title="No parts linked" text="Parts / Inventory is planned for a later sprint." />}
-      {tab === 'docs' && <EmptyState icon="fileText" title="No documents" text="Manuals and warranty documents will appear here." />}
+      {tab === 'docs' && (documents.length === 0
+        ? <EmptyState icon="fileText" title="No documents" text={onEdit ? 'Use Edit to link manuals, warranty certificates or service reports.' : 'Manuals and warranty documents will appear here.'} />
+        : (
+          <div className="stack gap-8" style={{ marginTop: 16 }}>
+            {documents.map((d) => (
+              <a key={d.url} className="note-item inline-icon" href={d.url} target="_blank" rel="noreferrer noopener" style={{ display: 'flex' }}>
+                <Icon name="fileText" size={18} /><span className="link">{d.name}</span>
+              </a>
+            ))}
+          </div>
+        ))}
     </div>
   );
 }

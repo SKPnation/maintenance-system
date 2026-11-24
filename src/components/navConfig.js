@@ -61,6 +61,7 @@ export const NAV = {
         { label: 'Trades', to: '/admin/trades', icon: 'wrench' },
         { label: 'Routing Rules', to: '/admin/routing-rules', icon: 'route' },
         { label: 'Locations', to: '/admin/locations', icon: 'mapPin' },
+        { label: 'Assets', to: '/admin/assets', icon: 'box' },
       ] },
       { label: 'System', items: [
         { label: 'System Settings', to: '/admin/system-settings', icon: 'settings' },

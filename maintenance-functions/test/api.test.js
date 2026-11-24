@@ -293,3 +293,224 @@ test("level rules: unique names, valid targets, one must stay active, used level
   for (const name of ["Critical", "Medium"]) await call("admin", "deletePriorityLevel", {id: levelId(name)});
   await rejects(call("admin", "savePriorityLevel", {...DEMO_LEVELS[1], id: levelId("High"), active: false}), "failed-precondition", /stay active/);
 });
+
+// ---------------- PB-13 routing ----------------
+
+const routingDefaults = () => [
+  {name: "Appliance/Equipment", description: "", active: true, managerId: "mgrAppliance"},
+  {name: "Electrical", description: "", active: true, managerId: "mgrElec"},
+  {name: "HVAC", description: "", active: true, managerId: "mgrElec"},
+  {name: "Information Technology", description: "", active: true, managerId: "mgrIT"},
+  {name: "General Maintenance", description: "", active: true, managerId: ""},
+];
+const seedRoutingManagers = () => {
+  for (const [uid, name] of [["mgrAppliance", "Appliance Manager"], ["mgrElec", "Electrical Category Manager"], ["mgrIT", "IT Manager"]]) {
+    db.seed(`users/${uid}`, {active: true, role: "manager", name, category: ""});
+  }
+};
+const catId = (name) => [...db.store.entries()].find(([k, v]) => k.startsWith("categories/") && v.name === name)[0].split("/")[1];
+
+test("routing lookup: matched, unknown, inactive and unmapped categories", () => {
+  const routing = require("../routing");
+  const cats = [...routingDefaults(), {name: "Plumbing", active: false, managerId: "x"}, {name: "Grounds", active: true, managerId: ""}];
+  assert.deepEqual(routing.resolveRoute("hvac", cats), {category: "HVAC", managerId: "mgrElec", fallback: false, reason: "matched"});
+  assert.equal(routing.resolveRoute("Electronics", cats).category, "General Maintenance");
+  assert.equal(routing.resolveRoute("Electronics", cats).reason, "unknown");
+  assert.equal(routing.resolveRoute("Plumbing", cats).reason, "inactive");
+  assert.equal(routing.resolveRoute("Grounds", cats).reason, "unmapped");
+  assert.equal(routing.resolveRoute("Grounds", cats).managerId, null, "unmapped GM -> manual review");
+});
+
+test("only admins set up routing; setup routes existing records and runs once", async () => {
+  seedRoutingManagers();
+  db.seed("requests/old", {requesterId: "req", status: "submitted", analysisStatus: "completed", routedCategory: "Plumbing"});
+  db.seed("requests/hvacOld", {requesterId: "req", status: "Approved", analysisStatus: "completed", routedCategory: "HVAC", workOrderId: "wo1"});
+
+  await rejects(call("mgr", "importRouting", {categories: routingDefaults()}), "permission-denied");
+  await rejects(call("admin", "importRouting", {categories: routingDefaults().slice(0, 4)}), "invalid-argument", /General Maintenance/);
+  await rejects(call("admin", "importRouting", {categories: [...routingDefaults().slice(0, 4), {name: "General Maintenance", active: true, managerId: "tech"}]}), "invalid-argument", /active Category Manager/);
+
+  const result = await call("admin", "importRouting", {categories: routingDefaults()});
+  assert.equal(result.count, 5);
+  assert.ok(db.read("settings/routing"));
+
+  // Pending unknown category moves to General Maintenance; approved HVAC keeps its category, gets the Electrical manager.
+  assert.equal(db.read("requests/old").routedCategory, "General Maintenance");
+  assert.equal(db.read("requests/old").routedManagerId, null);
+  assert.equal(db.read("requests/hvacOld").routedManagerId, "mgrElec");
+  assert.equal(db.read("workOrders/wo1").managerId, "mgrElec");
+
+  await rejects(call("admin", "importRouting", {categories: routingDefaults()}), "failed-precondition", /already/);
+});
+
+test("category edits: add, remap, deactivate; fallback protected; non-admins blocked", async () => {
+  seedRoutingManagers();
+  await rejects(call("admin", "saveCategory", {name: "Plumbing", active: true}), "failed-precondition", /Set up routing/);
+  await call("admin", "importRouting", {categories: routingDefaults()});
+
+  const {id} = await call("admin", "saveCategory", {name: "Plumbing", description: "Pipes", active: true, managerId: "mgrAppliance"});
+  assert.equal(db.read(`categories/${id}`).managerId, "mgrAppliance");
+
+  await rejects(call("admin", "saveCategory", {name: "hvac", active: true}), "already-exists");
+  await rejects(call("admin", "saveCategory", {id: catId("General Maintenance"), name: "General Maintenance", active: false}), "failed-precondition", /must stay active/);
+  await rejects(call("admin", "saveCategory", {id: catId("General Maintenance"), name: "Misc", active: true}), "failed-precondition", /can't be renamed/);
+
+  await call("admin", "saveCategory", {id: catId("HVAC"), name: "HVAC", description: "", active: true, managerId: "mgr"});
+  assert.equal(db.read(`categories/${catId("HVAC")}`).managerId, "mgr");
+
+  for (const uid of ["mgr", "tech", "req"]) {
+    await rejects(call(uid, "saveCategory", {name: "X", active: true}), "permission-denied");
+  }
+});
+
+test("after setup, managers act only on records routed to them", async () => {
+  seedRoutingManagers();
+  await call("admin", "importRouting", {categories: routingDefaults()});
+  db.seed("requests/r1", {requesterId: "req", status: "submitted", analysisStatus: "completed", routedCategory: "HVAC", routedManagerId: "mgrElec", priority: "Medium"});
+
+  // mgr's legacy category is HVAC, but routing now sends HVAC to the Electrical manager.
+  await rejects(call("mgr", "updateRequest", {id: "r1", changes: {priority: "High"}}), "permission-denied");
+  await call("mgrElec", "updateRequest", {id: "r1", changes: {priority: "High"}});
+  assert.equal(db.read("requests/r1").priority, "High");
+});
+
+// ---------------- PB-04 review corrections ----------------
+
+test("review corrections are saved with history; original AI recommendation is kept", async () => {
+  db.seed("requests/rv", {requesterId: "req", status: "submitted", analysisStatus: "completed", routedCategory: "HVAC", priority: "Medium", safety: false, description: "Leak", ai: {category: "HVAC", trade: "HVAC Technician", priority: "Medium", safetyFlag: false}});
+
+  const result = await call("mgr", "updateRequest", {id: "rv", changes: {priority: "High", safety: true, trade: "Plumber", note: "Water near panel"}});
+  assert.equal(result.unchanged, false);
+
+  const r = db.read("requests/rv");
+  assert.equal(r.priority, "High");
+  assert.equal(r.safety, true);
+  assert.equal(r.reviewedTrade, "Plumber");
+  assert.equal(r.ai.priority, "Medium", "AI recommendation untouched");
+
+  const {original, entries} = await call("mgr", "listReviewHistory", {id: "rv"});
+  assert.equal(original.ai.trade, "HVAC Technician");
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].changedByName, "Erin");
+  assert.equal(entries[0].note, "Water near panel");
+  assert.deepEqual(entries[0].changes.map((c) => [c.field, c.from, c.to]), [["priority", "Medium", "High"], ["safety", false, true], ["reviewedTrade", "HVAC Technician", "Plumber"]]);
+
+  // Saving the same values again records nothing new.
+  assert.equal((await call("mgr", "updateRequest", {id: "rv", changes: {priority: "High"}})).unchanged, true);
+
+  for (const uid of ["req", "tech", "mgrOther"]) {
+    await rejects(call(uid, "listReviewHistory", {id: "rv"}), "permission-denied");
+  }
+  assert.ok(!JSON.stringify(db.read("requests/rv")).includes("Water near panel"), "note stays internal");
+});
+
+test("changing the category reroutes to the mapped manager, or General Maintenance if unknown", async () => {
+  seedRoutingManagers();
+  await call("admin", "importRouting", {categories: routingDefaults()});
+  db.seed("requests/a", {requesterId: "req", status: "submitted", analysisStatus: "completed", routedCategory: "HVAC", routedManagerId: "mgrElec", priority: "Medium"});
+  db.seed("requests/b", {requesterId: "req", status: "submitted", analysisStatus: "completed", routedCategory: "HVAC", routedManagerId: "mgrElec", priority: "Medium"});
+
+  const moved = await call("mgrElec", "updateRequest", {id: "a", changes: {category: "Information Technology"}});
+  assert.equal(moved.reroute.movedQueue, true);
+  assert.equal(db.read("requests/a").routedManagerId, "mgrIT");
+  await rejects(call("mgrElec", "updateRequest", {id: "a", changes: {priority: "Low"}}), "permission-denied", /another manager/);
+  await call("mgrIT", "updateRequest", {id: "a", changes: {priority: "Low"}});
+
+  await call("mgrElec", "updateRequest", {id: "b", changes: {category: "Electronics"}});
+  assert.equal(db.read("requests/b").routedCategory, "General Maintenance");
+  assert.equal(db.read("requests/b").routingReason, "unknown");
+  assert.equal(db.read("requests/b").routedManagerId, null);
+});
+
+test("an existing inactive priority can be kept while editing other fields", async () => {
+  await call("admin", "importPriorityLevels", {levels: DEMO_LEVELS});
+  const lowId = [...db.store.entries()].find(([k, v]) => k.startsWith("priorityLevels/") && v.name === "Low")[0].split("/")[1];
+  await call("admin", "savePriorityLevel", {...DEMO_LEVELS[3], id: lowId, active: false});
+  db.seed("requests/keep", {requesterId: "req", status: "submitted", analysisStatus: "completed", routedCategory: "HVAC", priority: "Low"});
+
+  await call("mgr", "updateRequest", {id: "keep", changes: {priority: "Low", safety: true}});
+  assert.equal(db.read("requests/keep").priority, "Low");
+  await rejects(call("mgr", "updateRequest", {id: "keep", changes: {priority: "Lowest"}}), "invalid-argument");
+});
+
+// ---------------- PB-20 assets ----------------
+
+const assetInput = (overrides = {}) => ({tag: "ac-204", name: "Ceiling AC", type: "HVAC", category: "HVAC", buildingId: "b1", roomId: "r204", status: "Operational", installDate: "2024-01-15", warrantyExpiry: "2029-01-15", documents: [{name: "Manual", url: "https://example.com/manual.pdf"}], ...overrides});
+const seedBuilding = () => {
+  db.seed("buildings/b1", {name: "Building A", active: true});
+  db.seed("buildings/b1/rooms/r204", {name: "Room 204", active: true});
+};
+
+test("admins create assets with unique tags and required fields", async () => {
+  seedBuilding();
+  const {id} = await call("admin", "createAsset", assetInput());
+  assert.equal(id, "AC-204");
+  const saved = db.read("assets/AC-204");
+  assert.equal(saved.location, "Building A - Room 204");
+  assert.equal(saved.documents.length, 1);
+
+  await rejects(call("admin", "createAsset", assetInput({tag: "AC-204"})), "already-exists");
+  for (const bad of [{name: ""}, {status: "Broken"}, {buildingId: "nope"}, {tag: "bad tag!"}, {warrantyExpiry: "2020-01-01"}, {documents: [{name: "x", url: "ftp://x"}]}]) {
+    await rejects(call("admin", "createAsset", assetInput({tag: "NEW-1", ...bad})), (bad.buildingId ? "invalid-argument" : "invalid-argument"));
+  }
+  assert.equal(db.read("assets/NEW-1"), undefined);
+  for (const uid of ["mgr", "tech", "req"]) {
+    await rejects(call(uid, "createAsset", assetInput({tag: "X-1"})), "permission-denied");
+  }
+});
+
+test("admins edit asset details; the tag can't change; others are rejected", async () => {
+  seedBuilding();
+  await call("admin", "createAsset", assetInput());
+  await call("admin", "updateAsset", {...assetInput(), id: "AC-204", status: "Needs Maintenance", roomId: "", documents: []});
+  const saved = db.read("assets/AC-204");
+  assert.equal(saved.status, "Needs Maintenance");
+  assert.equal(saved.location, "Building A");
+  assert.deepEqual(saved.documents, []);
+
+  await rejects(call("admin", "updateAsset", {...assetInput({tag: "AC-999"}), id: "AC-204"}), "invalid-argument", /can't be changed/);
+  await rejects(call("admin", "updateAsset", {...assetInput(), id: "AC-204", name: ""}), "invalid-argument");
+  await rejects(call("mgr", "updateAsset", {...assetInput(), id: "AC-204", name: "Hacked"}), "permission-denied");
+  assert.equal(db.read("assets/AC-204").name, "Ceiling AC");
+});
+
+// ---------------- PB-35 support settings ----------------
+
+test("only admins publish the facilities contact; verified contacts need a phone", async () => {
+  await rejects(call("admin", "saveSupportSettings", {emergencyPhone: "", verified: true}), "invalid-argument", /phone number/);
+  await rejects(call("admin", "saveSupportSettings", {emergencyPhone: "call me", verified: false}), "invalid-argument");
+  await rejects(call("req", "saveSupportSettings", {emergencyPhone: "(936) 261-1234", verified: true}), "permission-denied");
+
+  await call("admin", "saveSupportSettings", {emergencyLabel: "Facilities Emergency Line", emergencyPhone: "(936) 261-1234", verified: true});
+  assert.equal(db.read("settings/support").verified, true);
+});
+
+test("approval keeps an existing inactive priority but rejects choosing one", async () => {
+  await call("admin", "importPriorityLevels", {levels: DEMO_LEVELS});
+  const lowId = [...db.store.entries()].find(([k, v]) => k.startsWith("priorityLevels/") && v.name === "Low")[0].split("/")[1];
+  await call("admin", "savePriorityLevel", {...DEMO_LEVELS[3], id: lowId, active: false});
+  const order = (priority) => ({title: "Fix", description: "Fix it", trade: "HVAC Technician", priority, safety: false, technicianId: ""});
+
+  db.seed("requests/ap1", {requesterId: "req", status: "submitted", analysisStatus: "completed", routedCategory: "HVAC", priority: "Low"});
+  await call("mgr", "approveRequest", {requestId: "ap1", workOrder: order("Low")});
+  assert.equal(db.read("requests/ap1").status, "Approved");
+
+  db.seed("requests/ap2", {requesterId: "req", status: "submitted", analysisStatus: "completed", routedCategory: "HVAC", priority: "High"});
+  await rejects(call("mgr", "approveRequest", {requestId: "ap2", workOrder: order("Low")}), "invalid-argument");
+});
+
+test("approval after routing setup stamps the owning manager and the request's category", async () => {
+  seedRoutingManagers();
+  await call("admin", "importRouting", {categories: routingDefaults()});
+  db.seed("requests/ap3", {requesterId: "req", status: "submitted", analysisStatus: "completed", routedCategory: "HVAC", routedManagerId: "mgrElec", priority: "Medium"});
+  db.seed("users/techH", {active: true, role: "technician", trade: "HVAC Technician", name: "Tunde"});
+
+  await rejects(call("mgrElec", "approveRequest", {requestId: "ap3", workOrder: {title: "x", description: "y", trade: "HVAC Technician", priority: "Medium", safety: false, category: "Electrical"}}), "failed-precondition", /Save changes first/);
+  const {id} = await call("mgrElec", "approveRequest", {requestId: "ap3", workOrder: {title: "x", description: "y", trade: "HVAC Technician", priority: "Medium", safety: false, technicianId: "techH", category: "HVAC"}});
+  const wo = db.read(`workOrders/${id}`);
+  assert.equal(wo.category, "HVAC");
+  assert.equal(wo.managerId, "mgrElec");
+
+  await call("mgrElec", "scheduleWorkOrder", {id, serviceDate: "2026-12-02", startTime: "09:00", durationHours: 1, timeZone: "America/Chicago"});
+  await rejects(call("mgr", "scheduleWorkOrder", {id, serviceDate: "2026-12-02", startTime: "11:00", durationHours: 1, timeZone: "America/Chicago"}), "permission-denied");
+});

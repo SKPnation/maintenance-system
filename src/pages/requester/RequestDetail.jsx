@@ -11,13 +11,13 @@ import {
   EmptyState,
   PageHeader,
   PriorityPill,
+  SafetyCard,
   StatusPill,
 } from '../../components/ui.jsx';
 
 import { useStore } from '../../context/StoreContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { db, configured } from '../../firebase.js';
-import { EMERGENCY_PHONE } from '../../data/mock.js';
 import { fmtDateTime, fmtHours, fmtServiceWindow } from '../../data/format.js';
 import { REQUEST_STAGE } from '../../components/RequestBlocks.jsx';
 
@@ -94,7 +94,7 @@ const HISTORY_LABEL = {
 export default function RequestDetail() {
   const { id } = useParams();
   const { state } = useLocation();
-  const { requests } = useStore();
+  const { requests, emergencyContact } = useStore();
   const toast = useToast();
 
   const [liveRequest, setLiveRequest] = useState(null);
@@ -743,31 +743,7 @@ export default function RequestDetail() {
             </div>
           </Card>
 
-          <section className="sos help-card">
-            <div className="sos-row">
-              <div className="sos-icon">
-                <Icon name="headset" size={26} strokeWidth={2} />
-              </div>
-
-              <div>
-                <h3 className="sos-title">Need Help?</h3>
-
-                <p className="sos-text" style={{ fontSize: 14 }}>
-                  If this is an urgent safety issue (e.g. gas leak,
-                  fire, electrical hazard), please contact facilities
-                  immediately.
-                </p>
-              </div>
-            </div>
-
-            <a
-              className="sos-phone"
-              href={`tel:${EMERGENCY_PHONE.replace(/\D/g, '')}`}
-            >
-              <Icon name="phone" size={26} />
-              <span>{EMERGENCY_PHONE}</span>
-            </a>
-          </section>
+          <SafetyCard contact={emergencyContact} compact />
         </div>
       </div>
     </div>

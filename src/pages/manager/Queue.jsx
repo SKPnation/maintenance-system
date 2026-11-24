@@ -7,7 +7,10 @@ import {
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useStore } from '../../context/StoreContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
-import { CATEGORIES, TRADES } from '../../data/mock.js';
+import { TRADES } from '../../data/mock.js';
+import ReviewHistory from '../../components/ReviewHistory.jsx';
+import { useManagerScope } from '../../data/managerScope.js';
+import { reviewChanges, reviewOutcome, withCurrent } from '../../data/review.js';
 import { fmtDate, fmtDateTime, fmtTime } from '../../data/format.js';
 
 const getDate = (value) => value?.toDate?.() || (value?.seconds ? new Date(value.seconds * 1000) : value ? new Date(value) : null);
@@ -32,9 +35,7 @@ export default function ManagerQueue() {
   const [selectedId, setSelectedId] = useState(null);
   const [checked, setChecked] = useState([]);
 
-  const managerRequests = useMemo(() => requests.filter((r) =>
-    r.routedCategory === user?.category || (!r.routedCategory && r.category === user?.category)
-  ), [requests, user?.category]);
+  const { requests: managerRequests, label } = useManagerScope();
 
   const counts = {
     pending: managerRequests.filter(isPending).length,
@@ -78,7 +79,7 @@ export default function ManagerQueue() {
       <section className="queue-main">
         <div>
           <h1 className="page-title">My Queue</h1>
-          <p className="page-subtitle">Requests routed to {user.category}. Review AI recommendations and take action.</p>
+          <p className="page-subtitle">Requests routed to you for {label}. Review AI recommendations and take action.</p>
         </div>
 
         <div className="row between" style={{ borderBottom: '1px solid #E2E7EE' }}>
@@ -148,9 +149,23 @@ export default function ManagerQueue() {
             key={selected.id}
             request={selected}
             onClose={() => setSelectedId(null)}
-            onSave={(changes) => { updateRequest(selected.id, changes); toast('Changes saved'); }}
-            onReject={(note) => { rejectRequest(selected.id, note); toast(`${selected.id} rejected`); }}
-            onApprove={(changes) => { updateRequest(selected.id, changes); navigate(`/manager/review/${selected.id}`); }}
+            onSave={async (changes) => {
+              try {
+                const outcome = reviewOutcome(await updateRequest(selected.id, changes));
+                toast(outcome.message);
+                return outcome;
+              } catch (e) { toast(e.message, 'error'); return null; }
+            }}
+            onReject={async (note) => {
+              try { await rejectRequest(selected.id, note); toast(`${selected.id} rejected`); } catch (e) { toast(e.message, 'error'); }
+            }}
+            onApprove={async (changes) => {
+              try {
+                const outcome = reviewOutcome(await updateRequest(selected.id, changes));
+                if (outcome.moved) toast(outcome.message);
+                else navigate(`/manager/review/${selected.id}`);
+              } catch (e) { toast(e.message, 'error'); }
+            }}
           />
         ) : (
           <div className="panel-empty"><EmptyState icon="clipboard" title="Select a request" text="Choose a request from the queue to see its details." /></div>
@@ -161,15 +176,16 @@ export default function ManagerQueue() {
 }
 
 function RequestPanel({ request: r, onClose, onSave, onReject, onApprove }) {
-  const { priorityNames } = useStore();
+  const { priorityNames, categoryNames } = useStore();
   const [tab, setTab] = useState('overview');
+  const [savedAt, setSavedAt] = useState(0);
   const [form, setForm] = useState({
-    category: r.ai?.category || r.routedCategory || '', priority: r.priority || r.ai?.priority || 'Medium', trade: r.ai?.trade || '', safety: (r.safety || r.ai?.safetyFlag) ? 'Yes' : 'No', notes: '',
+    category: r.routedCategory || r.ai?.category || '', priority: r.priority || r.ai?.priority || 'Medium', trade: r.reviewedTrade || r.ai?.trade || '', safety: (r.safety ?? r.ai?.safetyFlag) ? 'Yes' : 'No', note: '',
   });
   const [rejecting, setRejecting] = useState(false);
   const [rejectNote, setRejectNote] = useState('');
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
-  const changes = { priority: form.priority, safety: form.safety === 'Yes', ai: { ...(r.ai || {}), category: form.category, trade: form.trade } };
+  const changes = reviewChanges(form);
 
   return (
     <>
@@ -209,7 +225,8 @@ function RequestPanel({ request: r, onClose, onSave, onReject, onApprove }) {
       {tab === 'ai' && <AiBox ai={r.ai} detailed />}
       {tab === 'history' && (
         <div className="box">
-          <div className="timeline">
+          <ReviewHistory request={r} refreshKey={`${savedAt}-${r.updatedAt?.seconds || ''}`} />
+          <div className="timeline" style={{ marginTop: 12 }}>
             {[
               { title: 'Request Submitted', meta: displayDate(r.submittedAt || r.createdAt), done: true },
               { title: 'AI Analysis Completed', meta: r.ai?.analyzedAt ? displayDate(r.ai?.analyzedAt) : 'In progress', done: !!r.ai?.analyzedAt },
@@ -230,19 +247,19 @@ function RequestPanel({ request: r, onClose, onSave, onReject, onApprove }) {
       <div className="box">
         <div className="box-title" style={{ fontSize: 14 }}><Icon name="edit" size={18} strokeWidth={2} />Manager Action</div>
         <div className="form-grid-2" style={{ marginTop: 12, gap: '10px 14px' }}>
-          <Field label="Category"><Select options={CATEGORIES} value={form.category} onChange={set('category')} /></Field>
-          <Field label="Priority"><Select options={priorityNames} value={form.priority} onChange={set('priority')} /></Field>
-          <Field label="Trade"><Select options={TRADES} value={form.trade} onChange={set('trade')} /></Field>
+          <Field label="Category" hint="Changing it can move the request to another manager."><Select options={withCurrent(categoryNames, r.routedCategory)} value={form.category} onChange={set('category')} /></Field>
+          <Field label="Priority"><Select options={withCurrent(priorityNames, r.priority)} value={form.priority} onChange={set('priority')} /></Field>
+          <Field label="Trade"><Select options={withCurrent(TRADES, form.trade)} value={form.trade} onChange={set('trade')} /></Field>
           <Field label="Safety Flag"><Select options={['No', 'Yes']} value={form.safety} onChange={set('safety')} /></Field>
         </div>
-        <Field label="Notes (Optional)" className="" htmlFor="mgr-notes">
-          <Textarea id="mgr-notes" placeholder="Add a note about your review or changes..." value={form.notes} onChange={set('notes')} style={{ marginTop: 0 }} />
+        <Field label="Note (optional)" className="" htmlFor="mgr-notes" hint="Saved in History with your changes. Not shown to the requester.">
+          <Textarea id="mgr-notes" maxLength={1000} placeholder="Why are you changing the AI recommendation?" value={form.note} onChange={set('note')} style={{ marginTop: 0 }} />
         </Field>
       </div>
 
       <div className="panel-actions">
         <Button variant="danger" onClick={() => setRejecting(true)}>Reject</Button>
-        <Button variant="secondary" onClick={() => onSave(changes)}>Save Changes</Button>
+        <Button variant="secondary" onClick={async () => { const outcome = await onSave(changes); if (outcome) { setForm((f) => ({ ...f, note: '' })); setSavedAt(Date.now()); } }}>Save Changes</Button>
         <Button onClick={() => onApprove(changes)}>Approve &amp; Create Work Order</Button>
       </div>
 

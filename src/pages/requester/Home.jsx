@@ -4,12 +4,11 @@ import HeroIllustration from '../../components/HeroIllustration.jsx';
 import { Button, Card, KebabButton, SafetyCard, StatusPill } from '../../components/ui.jsx';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useStore } from '../../context/StoreContext.jsx';
-import { EMERGENCY_PHONE } from '../../data/mock.js';
 import { byNewest, fmtDate, fmtTime, greeting, requestStatus, requestSubmittedAt } from '../../data/format.js';
 
 export default function RequesterHome() {
   const { user } = useAuth();
-  const { requests } = useStore();
+  const { requests, emergencyContact } = useStore();
   const navigate = useNavigate();
   const mine = requests
     .filter((r) => r.requesterId === user.id)
@@ -89,7 +88,7 @@ export default function RequesterHome() {
             </div>
           </section>
 
-          <SafetyCard phone={EMERGENCY_PHONE} />
+          <SafetyCard contact={emergencyContact} showRoutine />
         </div>
       </div>
     </div>

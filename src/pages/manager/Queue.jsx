@@ -10,14 +10,14 @@ import { useToast } from '../../context/ToastContext.jsx';
 import { TRADES } from '../../data/mock.js';
 import ReviewHistory from '../../components/ReviewHistory.jsx';
 import { useManagerScope } from '../../data/managerScope.js';
-import { reviewChanges, reviewOutcome, withCurrent } from '../../data/review.js';
+import { isAwaitingReview, reviewChanges, reviewOutcome, withCurrent } from '../../data/review.js';
 import { fmtDate, fmtDateTime, fmtTime } from '../../data/format.js';
 
 const getDate = (value) => value?.toDate?.() || (value?.seconds ? new Date(value.seconds * 1000) : value ? new Date(value) : null);
 const displayDate = (value) => { const d = getDate(value); return d && !Number.isNaN(d.getTime()) ? d.toLocaleString() : 'Not available'; };
 const isApproved = (r) => ['approved', 'scheduled', 'in progress', 'in_progress', 'completed'].includes(String(r.status || '').toLowerCase());
 const isRejected = (r) => ['rejected', 'cancelled'].includes(String(r.status || '').toLowerCase());
-const isPending = (r) => r.analysisStatus === 'completed' && !isApproved(r) && !isRejected(r);
+const isPending = (r) => isAwaitingReview(r);
 const locationOf = (r) => r.location || [r.buildingName || r.buildingId, r.roomName || r.roomId].filter(Boolean).join(' / ') || 'Not available';
 
 const PRIORITY_RANK = { Critical: 0, High: 1, Medium: 2, Low: 3 };
@@ -244,6 +244,18 @@ function RequestPanel({ request: r, onClose, onSave, onReject, onApprove }) {
         </div>
       )}
 
+      {!isAwaitingReview(r) ? (
+        <div className="info-card" role="status">
+          <Icon name="info" size={22} />
+          <div style={{ fontSize: 14 }}>
+            {r.workOrderId || isApproved(r)
+              ? 'This request has been approved and has a work order. Manage it from Work Orders.'
+              : isRejected(r)
+                ? 'This request has been rejected. No further action is needed.'
+                : 'This request is still being analyzed. Actions become available when analysis finishes.'}
+          </div>
+        </div>
+      ) : (<>
       <div className="box">
         <div className="box-title" style={{ fontSize: 14 }}><Icon name="edit" size={18} strokeWidth={2} />Manager Action</div>
         <div className="form-grid-2" style={{ marginTop: 12, gap: '10px 14px' }}>
@@ -262,6 +274,7 @@ function RequestPanel({ request: r, onClose, onSave, onReject, onApprove }) {
         <Button variant="secondary" onClick={async () => { const outcome = await onSave(changes); if (outcome) { setForm((f) => ({ ...f, note: '' })); setSavedAt(Date.now()); } }}>Save Changes</Button>
         <Button onClick={() => onApprove(changes)}>Approve &amp; Create Work Order</Button>
       </div>
+      </>)}
 
       {rejecting && (
         <Modal

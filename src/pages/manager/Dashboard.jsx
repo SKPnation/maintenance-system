@@ -5,9 +5,10 @@ import { useWorkOrderFilters, WorkOrderFilters } from '../../components/WorkOrde
 import { useStore } from '../../context/StoreContext.jsx';
 import { fmtDate, fmtServiceWindow, requestStatus, requestSubmittedAt, toDate } from '../../data/format.js';
 import { useManagerScope } from '../../data/managerScope.js';
+import { isAwaitingReview } from '../../data/review.js';
 
 const OPEN = ['Unassigned', 'Assigned', 'In Progress'];
-const isPendingReview = (r) => r.analysisStatus === 'completed' && ['submitted', 'pending review'].includes(String(r.status || '').toLowerCase()) && !r.workOrderId;
+const isPendingReview = isAwaitingReview;
 
 // PB-11: Manager Dashboard built from saved work orders the manager is allowed to see.
 export default function Dashboard() {

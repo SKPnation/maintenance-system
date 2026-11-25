@@ -24,3 +24,13 @@ export function reviewOutcome(result) {
   }
   return { message: reroute ? `Category changed to ${reroute.toCategory}` : 'Changes saved', moved: false };
 }
+
+// Same rule as the server's awaitingReview(): any capitalization of
+// submitted / pending review, analysis finished (or failed → manual review),
+// and no work order yet.
+const REVIEWABLE = ['submitted', 'pending review', 'pending_review'];
+export const isAwaitingReview = (r) =>
+  Boolean(r) &&
+  ['completed', 'failed'].includes(r.analysisStatus) &&
+  REVIEWABLE.includes(String(r.status || '').trim().toLowerCase()) &&
+  !r.workOrderId;

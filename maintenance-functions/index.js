@@ -193,17 +193,31 @@ function ensureManagerCategory(record, manager) {
   }
 }
 
+// Older records use "Submitted" / "pending_review"; failed AI analysis means
+// the request waits for manual review rather than being stuck.
+const REVIEWABLE_STATUSES = ["submitted", "pending review", "pending_review"];
+
+function awaitingReview(record) {
+  return ["completed", "failed"].includes(record.analysisStatus) &&
+    REVIEWABLE_STATUSES.includes(String(record.status || "").trim().toLowerCase()) &&
+    !record.workOrderId;
+}
+
 function ensurePendingReview(record) {
-  if (
-    record.analysisStatus !== "completed" ||
-        !["submitted", "Pending Review"].includes(record.status) ||
-        record.workOrderId
-  ) {
-    throw new HttpsError(
-        "failed-precondition",
-        "This request is not awaiting manager review.",
-    );
+  if (awaitingReview(record)) return;
+
+  const status = String(record.status || "").trim().toLowerCase();
+  let reason = "This request is not awaiting manager review.";
+
+  if (record.workOrderId || status === "approved") {
+    reason = "This request has already been approved and has a work order.";
+  } else if (status === "rejected") {
+    reason = "This request has already been rejected.";
+  } else if (!["completed", "failed"].includes(record.analysisStatus)) {
+    reason = "This request is still being analyzed. Try again in a moment.";
   }
+
+  throw new HttpsError("failed-precondition", reason);
 }
 
 function validateTechnician(snapshot, trade) {
@@ -1570,9 +1584,7 @@ async function backfillRouting(categories) {
     if (!data.routedCategory) continue; // Not analyzed yet; the AI step routes it.
 
     const route = routing.resolveRoute(data.routedCategory, categories);
-    const pending = data.analysisStatus === "completed" &&
-      ["submitted", "Pending Review"].includes(data.status) &&
-      !data.workOrderId;
+    const pending = awaitingReview(data);
 
     const update = {routedManagerId: route.managerId};
 

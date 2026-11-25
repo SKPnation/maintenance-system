@@ -66,4 +66,39 @@ function requireActiveTrade(value, trades) {
   return match;
 }
 
-module.exports = {DEFAULT_TRADES, activeTrades, matchActiveTrade, requireActiveTrade, validateTrade};
+// Primary trade first, then any additional trades.
+function technicianTrades(user) {
+  const extra = Array.isArray(user && user.additionalTrades) ? user.additionalTrades : [];
+  return [user && user.trade, ...extra].filter((t) => typeof t === "string" && t.trim());
+}
+
+function hasTrade(user, trade) {
+  return technicianTrades(user).some((t) => tradesMatch(t, trade));
+}
+
+// Additional trades: canonical active names, no duplicates, not the primary.
+// Trades the technician already had may stay even if since deactivated.
+function validateAdditionalTrades(value, trades, {primary = "", existing = []} = {}) {
+  if (value == null) return [];
+
+  if (!Array.isArray(value) || value.length > 10) {
+    throw new HttpsError("invalid-argument", "Choose up to 10 additional trades.");
+  }
+
+  const result = [];
+
+  for (const item of value) {
+    if (typeof item !== "string" || !item.trim()) continue;
+
+    const kept = existing.find((t) => tradesMatch(t, item));
+    const name = kept || requireActiveTrade(item, trades);
+
+    if (tradesMatch(name, primary) || result.some((t) => tradesMatch(t, name))) continue;
+
+    result.push(name);
+  }
+
+  return result;
+}
+
+module.exports = {DEFAULT_TRADES, activeTrades, hasTrade, matchActiveTrade, requireActiveTrade, technicianTrades, validateAdditionalTrades, validateTrade};

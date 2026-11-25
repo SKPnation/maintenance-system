@@ -231,7 +231,7 @@ test("assignment accepts equivalent trade wording and explains real mismatches",
   await call("mgr", "assignTechnician", {id: "woOpen", technicianId: "techShort"});
   assert.equal(db.read("workOrders/woOpen").technicianId, "techShort");
 
-  await rejects(call("mgr", "assignTechnician", {id: "woOpen", technicianId: "sparky"}), "invalid-argument", /Sparky's trade \(Electrician\) does not match/);
+  await rejects(call("mgr", "assignTechnician", {id: "woOpen", technicianId: "sparky"}), "invalid-argument", /Sparky's trades \(Electrician\) don't include/);
   await rejects(call("mgr", "assignTechnician", {id: "woOpen", technicianId: "techOff"}), "invalid-argument", /active technician/);
 });
 
@@ -583,4 +583,33 @@ test("technician accounts need an active trade", async () => {
   await rejects(call("admin", "updateUser", {uid: "tech", trade: "Plumber"}), "invalid-argument", /Trade must be one of/);
   await call("admin", "updateUser", {uid: "tech", trade: "electrician"});
   assert.equal(db.read("users/tech").trade, "Electrician");
+});
+
+// ---------------- Additional trades ----------------
+
+test("technicians with an additional trade can be assigned that trade's work", async () => {
+  await call("admin", "importTrades", {trades: DEFAULT_TRADES});
+  db.seed("workOrders/elecJob", {title: "Outlet", category: "HVAC", trade: "Electrician", status: "Unassigned", technicianId: ""});
+
+  // tech is an HVAC Technician only.
+  await rejects(call("mgr", "assignTechnician", {id: "elecJob", technicianId: "tech"}), "invalid-argument", /don't include/);
+
+  await call("admin", "updateUser", {uid: "tech", additionalTrades: ["electric", "HVAC", "Electrician"]});
+  assert.deepEqual(db.read("users/tech").additionalTrades, ["Electrician"], "canonical, deduped, primary excluded");
+
+  await call("mgr", "assignTechnician", {id: "elecJob", technicianId: "tech"});
+  assert.equal(db.read("workOrders/elecJob").technicianId, "tech");
+});
+
+test("additional trades must be active when added; existing ones may stay; used ones can't be renamed", async () => {
+  await call("admin", "importTrades", {trades: DEFAULT_TRADES});
+  await call("admin", "updateUser", {uid: "tech", additionalTrades: ["Plumber"]});
+  await call("admin", "saveTrade", {id: tradeId("Plumber"), name: "Plumber", description: "", active: false});
+
+  await rejects(call("admin", "updateUser", {uid: "tech2", additionalTrades: ["Plumber"]}), "invalid-argument", /Trade must be one of/);
+  await call("admin", "updateUser", {uid: "tech", additionalTrades: ["Plumber", "Electrician"]});
+  assert.deepEqual(db.read("users/tech").additionalTrades, ["Plumber", "Electrician"]);
+
+  await rejects(call("admin", "saveTrade", {id: tradeId("Electrician"), name: "Electrical Tech", active: true}), "failed-precondition", /can't be renamed/);
+  await rejects(call("mgr", "updateUser", {uid: "tech", additionalTrades: []}), "permission-denied");
 });

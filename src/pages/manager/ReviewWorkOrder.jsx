@@ -9,7 +9,7 @@ import { useToast } from '../../context/ToastContext.jsx';
 import ReviewHistory from '../../components/ReviewHistory.jsx';
 import { isAwaitingReview, reviewChanges, reviewOutcome, withCurrent } from '../../data/review.js';
 import { fmtDateTime } from '../../data/format.js';
-import { tradesMatch } from '../../data/trades.js';
+import { hasTrade, tradesMatch } from '../../data/trades.js';
 
 // Snap the AI's free-text trade to one of the standard trades (or none).
 const standardTrade = (value, list) => list.find((t) => tradesMatch(t, value)) || '';
@@ -38,7 +38,7 @@ export default function ReviewWorkOrder() {
     description: r?.ai?.suggestedAction || '',
     notes: '',
     note: '',
-    technicianId: technicians.find((t) => tradesMatch(t.trade, r?.ai?.trade))?.id || '',
+    technicianId: technicians.find((t) => t.trade && tradesMatch(t.trade, r?.ai?.trade))?.id || technicians.find((t) => hasTrade(t, r?.ai?.trade))?.id || '',
   }));
   // Requests and technicians may arrive after this component first renders.
   useEffect(() => {
@@ -51,7 +51,7 @@ export default function ReviewWorkOrder() {
       safety: (r.safety ?? r.ai?.safetyFlag) ? 'Yes' : 'No',
       title: `Inspect and service: ${(r.description || '').split('.')[0].slice(0, 60)}`,
       description: r.ai?.suggestedAction || r.description || '',
-      technicianId: technicians.find((t) => tradesMatch(t.trade, r.ai?.trade))?.id || '',
+      technicianId: technicians.find((t) => t.trade && tradesMatch(t.trade, r.ai?.trade))?.id || technicians.find((t) => hasTrade(t, r.ai?.trade))?.id || '',
     }));
   }, [r?.id, r?.analysisStatus, technicians.length]);
 
@@ -155,7 +155,7 @@ export default function ReviewWorkOrder() {
                   {tech ? <Avatar initials={tech.initials || tech.name?.slice(0, 2) || 'T'} size={32} /> : null}
                   <select value={form.technicianId} onChange={set('technicianId')} aria-label="Technician">
                     <option value="">Assign later</option>
-                    {technicians.filter((t) => !form.trade || tradesMatch(t.trade, form.trade)).map((t) => <option key={t.id} value={t.id}>{t.name} ({t.trade})</option>)}
+                    {technicians.filter((t) => !form.trade || hasTrade(t, form.trade)).map((t) => <option key={t.id} value={t.id}>{t.name} ({t.trade})</option>)}
                   </select>
                   <Icon name="chevronDown" size={16} strokeWidth={2.4} className="select-caret" />
                 </div>

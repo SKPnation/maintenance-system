@@ -249,10 +249,14 @@ function validateTechnician(snapshot, trade) {
     );
   }
 
-  if (!workflow.tradesMatch(snapshot.get("trade"), trade)) {
+  const technician = snapshot.data();
+
+  if (!tradeRules.hasTrade(technician, trade)) {
+    const list = tradeRules.technicianTrades(technician).join(", ") || "not set";
+
     throw new HttpsError(
         "invalid-argument",
-        `${snapshot.get("name") || "This technician"}'s trade (${snapshot.get("trade") || "not set"}) does not match this work order's trade (${trade || "not set"}).`,
+        `${technician.name || "This technician"}'s trades (${list}) don't include this work order's trade (${trade || "not set"}).`,
     );
   }
 }
@@ -289,9 +293,16 @@ async function createUser(payload) {
         optionalString(payload.category, "category") :
         "";
 
+  const tradeList = role === "technician" ? await loadTrades() : [];
+
   const trade = role === "technician" ?
-        tradeRules.requireActiveTrade(nonemptyString(payload.trade, "trade"), await loadTrades()) :
+        tradeRules.requireActiveTrade(nonemptyString(payload.trade, "trade"), tradeList) :
         "";
+
+  // A technician may also be qualified for other trades.
+  const additionalTrades = role === "technician" ?
+        tradeRules.validateAdditionalTrades(payload.additionalTrades, tradeList, {primary: trade}) :
+        [];
 
   let created;
 
@@ -320,6 +331,7 @@ async function createUser(payload) {
       role,
       category,
       trade,
+      additionalTrades,
       active: true,
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
@@ -402,6 +414,15 @@ async function updateUser(payload, callerUid) {
   const resultingTrade = updates.trade !== undefined ?
         updates.trade :
         snapshot.get("trade");
+
+  if (Object.hasOwn(payload, "additionalTrades")) {
+    updates.additionalTrades = resultingRole === "technician" ?
+      tradeRules.validateAdditionalTrades(payload.additionalTrades, await loadTrades(), {
+        primary: resultingTrade,
+        existing: snapshot.get("additionalTrades") || [],
+      }) :
+      [];
+  }
 
   if (resultingRole === "technician" && !resultingTrade) {
     throw new HttpsError(
@@ -1403,12 +1424,13 @@ async function listWorkOrderNotes(payload, request) {
 // ============================================================
 
 async function tradeInUse(name) {
-  const [technicians, workOrders] = await Promise.all([
+  const [technicians, additional, workOrders] = await Promise.all([
     db.collection("users").where("trade", "==", name).limit(1).get(),
+    db.collection("users").where("additionalTrades", "array-contains", name).limit(1).get(),
     db.collection("workOrders").where("trade", "==", name).limit(1).get(),
   ]);
 
-  return !technicians.empty || !workOrders.empty;
+  return !technicians.empty || !additional.empty || !workOrders.empty;
 }
 
 // First save: copy the trades the admin sees (the built-in list) into the database.

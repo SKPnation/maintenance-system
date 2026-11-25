@@ -25,6 +25,7 @@ import Team from './pages/manager/Team.jsx';
 import Categories from './pages/admin/Categories.jsx';
 import Help from './pages/requester/Help.jsx';
 import SystemSettings from './pages/admin/SystemSettings.jsx';
+import Trades from './pages/admin/Trades.jsx';
 import RoutingRules from './pages/admin/RoutingRules.jsx';
 
 function HomeRedirect() {
@@ -103,7 +104,7 @@ export default function App() {
         <Route path="users" element={<UsersRoles />} />
         <Route path="reports" element={soon('Reports', 'Organization-wide maintenance reporting.')} />
         <Route path="categories" element={<Categories />} />
-        <Route path="trades" element={soon('Trades', 'Technician trades and skills.')} />
+        <Route path="trades" element={<Trades />} />
         <Route path="routing-rules" element={<RoutingRules />} />
         <Route path="locations" element={<Locations />} />
         <Route path="assets" element={<Assets />} />

@@ -7,7 +7,6 @@ import {
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useStore } from '../../context/StoreContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
-import { TRADES } from '../../data/mock.js';
 import ReviewHistory from '../../components/ReviewHistory.jsx';
 import { useManagerScope } from '../../data/managerScope.js';
 import { isAwaitingReview, reviewChanges, reviewOutcome, withCurrent } from '../../data/review.js';
@@ -176,7 +175,7 @@ export default function ManagerQueue() {
 }
 
 function RequestPanel({ request: r, onClose, onSave, onReject, onApprove }) {
-  const { priorityNames, categoryNames } = useStore();
+  const { priorityNames, categoryNames, tradeNames } = useStore();
   const [tab, setTab] = useState('overview');
   const [savedAt, setSavedAt] = useState(0);
   const [form, setForm] = useState({
@@ -261,7 +260,7 @@ function RequestPanel({ request: r, onClose, onSave, onReject, onApprove }) {
         <div className="form-grid-2" style={{ marginTop: 12, gap: '10px 14px' }}>
           <Field label="Category" hint="Changing it can move the request to another manager."><Select options={withCurrent(categoryNames, r.routedCategory)} value={form.category} onChange={set('category')} /></Field>
           <Field label="Priority"><Select options={withCurrent(priorityNames, r.priority)} value={form.priority} onChange={set('priority')} /></Field>
-          <Field label="Trade"><Select options={withCurrent(TRADES, form.trade)} value={form.trade} onChange={set('trade')} /></Field>
+          <Field label="Trade"><Select options={withCurrent(tradeNames, form.trade)} value={form.trade} onChange={set('trade')} /></Field>
           <Field label="Safety Flag"><Select options={['No', 'Yes']} value={form.safety} onChange={set('safety')} /></Field>
         </div>
         <Field label="Note (optional)" className="" htmlFor="mgr-notes" hint="Saved in History with your changes. Not shown to the requester.">

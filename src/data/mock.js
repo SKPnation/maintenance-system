@@ -34,6 +34,12 @@ export const LOCATIONS = [
 
 export const CATEGORIES = ['Electrical', 'HVAC', 'Plumbing', 'Safety', 'General'];
 export const TRADES = ['HVAC Technician', 'Electrician', 'Plumber', 'General Maintenance'];
+export const TRADE_DESCRIPTIONS = {
+  'HVAC Technician': 'Heating, ventilation, air conditioning and thermostats.',
+  Electrician: 'Power, lighting, outlets, breakers and wiring.',
+  Plumber: 'Pipes, leaks, drains, toilets, taps and water heaters.',
+  'General Maintenance': "General repairs that don't need a specialist.",
+};
 export const PRIORITY_NAMES = ['Critical', 'High', 'Medium', 'Low'];
 
 export const PRIORITIES = [

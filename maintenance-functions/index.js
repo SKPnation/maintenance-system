@@ -14,6 +14,7 @@ const workflow = require("./workflow");
 const priorities = require("./priorities");
 const routing = require("./routing");
 const assets = require("./assets");
+const tradeRules = require("./trades");
 
 initializeApp();
 
@@ -59,6 +60,15 @@ function validateRole(role) {
   }
 
   return role;
+}
+
+// Admin-configured trades; the built-in list until some are saved.
+async function loadTrades() {
+  const snapshot = await db.collection("trades").get();
+
+  if (snapshot.empty) return tradeRules.DEFAULT_TRADES;
+
+  return snapshot.docs.map((doc) => ({id: doc.id, ...doc.data()}));
 }
 
 // Admin-configured priority levels; the built-in defaults until some are saved.
@@ -280,7 +290,7 @@ async function createUser(payload) {
         "";
 
   const trade = role === "technician" ?
-        nonemptyString(payload.trade, "trade") :
+        tradeRules.requireActiveTrade(nonemptyString(payload.trade, "trade"), await loadTrades()) :
         "";
 
   let created;
@@ -382,6 +392,12 @@ async function updateUser(payload, callerUid) {
   const resultingActive = updates.active !== undefined ?
         updates.active :
         snapshot.get("active");
+
+  // New or changed technician trades must be an active trade; an existing
+  // (possibly retired) trade can be kept.
+  if (resultingRole === "technician" && updates.trade && updates.trade !== snapshot.get("trade")) {
+    updates.trade = tradeRules.requireActiveTrade(updates.trade, await loadTrades());
+  }
 
   const resultingTrade = updates.trade !== undefined ?
         updates.trade :
@@ -707,7 +723,7 @@ async function updateManagerRequest(payload, request) {
   const id = nonemptyString(payload.id, "request ID", 128);
   const {fields, note} = validateReviewChanges(payload.changes);
 
-  const [levels, route] = await Promise.all([loadPriorityLevels(), loadRouting()]);
+  const [levels, route, trades] = await Promise.all([loadPriorityLevels(), loadRouting(), loadTrades()]);
 
   const ref = db.collection("requests").doc(id);
   const historyRef = ref.collection("reviewHistory").doc();
@@ -745,6 +761,8 @@ async function updateManagerRequest(payload, request) {
       // Existing records may keep an inactive priority; only new choices must be active.
       if (field === "priority") {
         updates.priority = priorities.validatePriorityName(value, levels);
+      } else if (field === "reviewedTrade") {
+        updates.reviewedTrade = tradeRules.requireActiveTrade(value, trades);
       } else if (field === "routedCategory") {
         const target = routing.resolveRoute(value, route.categories);
 
@@ -869,9 +887,9 @@ async function approveManagerRequest(payload, request) {
       2000,
   );
 
-  const trade = nonemptyString(input.trade, "trade", 100);
+  const requestedTrade = nonemptyString(input.trade, "trade", 100);
   const requestedPriority = nonemptyString(input.priority, "priority", 40);
-  const levels = await loadPriorityLevels();
+  const [levels, trades] = await Promise.all([loadPriorityLevels(), loadTrades()]);
   const safety = validateBoolean(input.safety, "safety");
 
   const technicianId = optionalString(
@@ -913,6 +931,11 @@ async function approveManagerRequest(payload, request) {
     const priority = requestedPriority === original.priority ?
       original.priority :
       priorities.validatePriorityName(requestedPriority, levels);
+
+    // Same for trades: new choices must be active; the request's own trade can stay.
+    const currentTrade = original.reviewedTrade || (original.ai && original.ai.trade) || "";
+    const trade = tradeRules.matchActiveTrade(requestedTrade, trades) ||
+      (requestedTrade === currentTrade ? requestedTrade : tradeRules.requireActiveTrade(requestedTrade, trades));
 
     if (input.category !== undefined && routing.normalize(input.category) !== routing.normalize(category)) {
       throw new HttpsError(
@@ -1373,6 +1396,101 @@ async function listWorkOrderNotes(payload, request) {
       };
     }),
   };
+}
+
+// ============================================================
+// ADMIN: TRADES
+// ============================================================
+
+async function tradeInUse(name) {
+  const [technicians, workOrders] = await Promise.all([
+    db.collection("users").where("trade", "==", name).limit(1).get(),
+    db.collection("workOrders").where("trade", "==", name).limit(1).get(),
+  ]);
+
+  return !technicians.empty || !workOrders.empty;
+}
+
+// First save: copy the trades the admin sees (the built-in list) into the database.
+async function importTrades(payload) {
+  const input = payload.trades;
+
+  if (!Array.isArray(input) || input.length < 1 || input.length > 50) {
+    throw new HttpsError("invalid-argument", "Provide between 1 and 50 trades.");
+  }
+
+  const trades = input.map((trade) => tradeRules.validateTrade(trade));
+
+  if (new Set(trades.map((t) => t.key)).size !== trades.length) {
+    throw new HttpsError("invalid-argument", "Trade names must be unique (\"HVAC\" and \"HVAC Technician\" count as the same).");
+  }
+
+  if (!trades.some((t) => t.active)) {
+    throw new HttpsError("invalid-argument", "At least one trade must be active.");
+  }
+
+  const collection = db.collection("trades");
+
+  await db.runTransaction(async (transaction) => {
+    const existing = await transaction.get(collection.limit(1));
+
+    if (!existing.empty) {
+      throw new HttpsError("failed-precondition", "Trades are already saved in the database.");
+    }
+
+    const now = FieldValue.serverTimestamp();
+
+    trades.forEach((trade) => transaction.create(collection.doc(), {...trade, createdAt: now, updatedAt: now}));
+  });
+
+  return {success: true, count: trades.length};
+}
+
+async function saveTrade(payload) {
+  const data = tradeRules.validateTrade(payload);
+  const id = optionalString(payload.id, "trade ID", 128);
+  const snapshot = await db.collection("trades").get();
+  const saved = snapshot.docs.map((doc) => ({id: doc.id, ...doc.data()}));
+
+  if (!saved.length) {
+    throw new HttpsError("failed-precondition", "Save the starting trades to the database first.");
+  }
+
+  const clash = saved.find((t) => t.id !== id && t.key === data.key);
+
+  if (clash) {
+    throw new HttpsError("already-exists", `This is the same trade as "${clash.name}".`);
+  }
+
+  if (!data.active && !saved.some((t) => t.id !== id && t.active === true)) {
+    throw new HttpsError("failed-precondition", "At least one trade must stay active.");
+  }
+
+  const now = FieldValue.serverTimestamp();
+
+  if (id) {
+    const current = saved.find((t) => t.id === id);
+
+    if (!current) {
+      throw new HttpsError("not-found", "Trade not found.");
+    }
+
+    // Technicians and work orders store the trade by name.
+    if (current.name !== data.name && await tradeInUse(current.name)) {
+      throw new HttpsError(
+          "failed-precondition",
+          `"${current.name}" is used by technicians or work orders, so it can't be renamed. Deactivate it and add a new trade instead.`,
+      );
+    }
+
+    await db.collection("trades").doc(id).update({...data, updatedAt: now});
+
+    return {success: true, id};
+  }
+
+  const ref = await db.collection("trades").add({...data, createdAt: now, updatedAt: now});
+
+  return {success: true, id: ref.id};
 }
 
 // ============================================================
@@ -1934,6 +2052,14 @@ exports.maintenanceApi = onCall(
           await requireAdmin(request);
           return await deletePriorityLevel(payload);
 
+        case "importTrades":
+          await requireAdmin(request);
+          return await importTrades(payload);
+
+        case "saveTrade":
+          await requireAdmin(request);
+          return await saveTrade(payload);
+
         case "importRouting":
           return await importRouting(payload, await requireAdmin(request));
 
@@ -2041,6 +2167,8 @@ exports.analyzeNewMaintenanceRequest = onDocumentCreated(
         // Retrieve active manager categories.
         const route = await loadRouting();
         const categories = routing.activeCategoryNames(route.categories);
+        const trades = await loadTrades();
+        const tradeNames = tradeRules.activeTrades(trades).map((t) => t.name);
 
         const levels = await loadPriorityLevels();
 
@@ -2065,6 +2193,7 @@ exports.analyzeNewMaintenanceRequest = onDocumentCreated(
                             "safetyFlag, confidence, and suggestedAction. " +
                             `Category must be one of ${JSON.stringify(categories)}. ` +
                             `If none is suitable, use "${DEFAULT_CATEGORY}". ` +
+                            `Trade must be one of ${JSON.stringify(tradeNames)}. ` +
                             priorities.priorityPrompt(levels) +
                             "Confidence must be a number between 0 and 1. " +
                             "safetyFlag must be a boolean. " +
@@ -2100,10 +2229,9 @@ exports.analyzeNewMaintenanceRequest = onDocumentCreated(
                     raw.suggestedAction.slice(0, 1000) :
                     "Inspect the reported issue and determine the required repair.";
 
-        const trade =
-                typeof raw.trade === "string" ?
-                    raw.trade.slice(0, 100) :
-                    "General Maintenance";
+        // Snap the AI's wording ("HVAC") to a saved trade ("HVAC Technician").
+        const rawTrade = typeof raw.trade === "string" ? raw.trade.slice(0, 100) : "";
+        const trade = tradeRules.matchActiveTrade(rawTrade, trades) || rawTrade || "General Maintenance";
 
         const safetyFlag = raw.safetyFlag === true;
         const priority = priorities.pickPriority(raw.priority, levels);

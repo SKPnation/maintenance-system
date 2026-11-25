@@ -142,6 +142,19 @@ service cloud.firestore {
     }
 
     // -----------------------------------------
+    // TRADES
+    // -----------------------------------------
+
+    match /trades/{tradeId} {
+
+      // All active users can view trades.
+      allow get, list: if isActiveUser();
+
+      // Only Cloud Functions manage trades.
+      allow create, update, delete: if false;
+    }
+
+    // -----------------------------------------
     // SETTINGS (routing flag, support contact)
     // -----------------------------------------
 

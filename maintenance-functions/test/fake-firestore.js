@@ -64,8 +64,8 @@ class Query {
     Object.assign(this, {db, path, filters, order, max});
   }
   where(field, op, value) {
-    if (op !== "==") throw new Error(`fake: unsupported op ${op}`);
-    return new Query(this.db, this.path, [...this.filters, [field, value]], this.order, this.max);
+    if (op !== "==" && op !== "array-contains") throw new Error(`fake: unsupported op ${op}`);
+    return new Query(this.db, this.path, [...this.filters, [field, value, op]], this.order, this.max);
   }
   orderBy(field, dir = "asc") {
     return new Query(this.db, this.path, this.filters, [field, dir], this.max);
@@ -78,7 +78,7 @@ class Query {
     let docs = [...this.db.store.entries()]
         .filter(([key]) => key.startsWith(prefix) && !key.slice(prefix.length).includes("/"))
         .map(([key, data]) => new DocSnapshot(this.db.doc(key), data))
-        .filter((snap) => this.filters.every(([f, v]) => snap.get(f) === v));
+        .filter((snap) => this.filters.every(([f, v, op]) => (op === "array-contains" ? Array.isArray(snap.get(f)) && snap.get(f).includes(v) : snap.get(f) === v)));
     if (this.order) {
       const [f, dir] = this.order;
       const val = (s) => (s.get(f) instanceof Timestamp ? s.get(f).ms : s.get(f));

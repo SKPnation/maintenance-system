@@ -4,7 +4,7 @@ import { Button, Card, EmptyState, Field, Input, Modal, PageHeader, Pill, Select
 import { useStore } from '../../context/StoreContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { configured } from '../../firebase.js';
-import { tradesMatch } from '../../data/trades.js';
+import { hasTrade } from '../../data/trades.js';
 
 const BLANK = { name: '', description: '', active: true };
 
@@ -17,7 +17,7 @@ export default function Trades() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const technicianCount = (name) => technicians.filter((t) => tradesMatch(t.trade, name)).length;
+  const technicianCount = (name) => technicians.filter((t) => hasTrade(t, name)).length;
   const open = (trade) => { setError(''); setEditing({ ...BLANK, ...trade }); };
   const set = (key) => (e) => setEditing((t) => ({ ...t, [key]: key === 'active' ? e.target.value === 'Active' : e.target.value }));
 

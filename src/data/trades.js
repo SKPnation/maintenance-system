@@ -25,3 +25,9 @@ export const tradesMatch = (a, b) => {
   const left = normalizeTrade(a);
   return Boolean(left) && left === normalizeTrade(b);
 };
+
+// Primary trade first, then additional trades (mirrors the server).
+export const technicianTrades = (t) =>
+  [t?.trade, ...(Array.isArray(t?.additionalTrades) ? t.additionalTrades : [])].filter(Boolean);
+
+export const hasTrade = (t, trade) => technicianTrades(t).some((name) => tradesMatch(name, trade));

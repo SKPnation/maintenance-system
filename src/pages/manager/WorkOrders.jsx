@@ -6,7 +6,7 @@ import { useStore } from '../../context/StoreContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { fmtServiceWindow } from '../../data/format.js';
 import { useManagerScope } from '../../data/managerScope.js';
-import { tradesMatch } from '../../data/trades.js';
+import { hasTrade, technicianTrades } from '../../data/trades.js';
 
 const CLOSED = ['Completed', 'Cancelled'];
 
@@ -95,7 +95,7 @@ export default function WorkOrders() {
 
 // Only technicians whose trade matches the work order, so the choice will be accepted.
 function TechnicianSelect({ w, technicians, disabled, onChange }) {
-  const qualified = technicians.filter((t) => tradesMatch(t.trade, w.trade) || t.id === w.technicianId);
+  const qualified = technicians.filter((t) => hasTrade(t, w.trade) || t.id === w.technicianId);
   return (
     <div className="stack" style={{ gap: 4 }}>
       <Select
@@ -104,7 +104,7 @@ function TechnicianSelect({ w, technicians, disabled, onChange }) {
         aria-label={`Technician for ${w.title}`}
         disabled={disabled}
         placeholder="Unassigned"
-        options={qualified.map((t) => ({ value: t.id, label: `${t.name} (${t.trade || 'no trade'})` }))}
+        options={qualified.map((t) => ({ value: t.id, label: `${t.name} (${technicianTrades(t).join(', ') || 'no trade'})` }))}
         value={w.technicianId || ''}
         onChange={(e) => onChange(e.target.value)}
       />

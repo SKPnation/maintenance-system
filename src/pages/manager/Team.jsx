@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Avatar, Card, EmptyState, Input, PageHeader, Pill } from '../../components/ui.jsx';
 import { useManagerScope } from '../../data/managerScope.js';
+import { technicianTrades } from '../../data/trades.js';
 import { useStore } from '../../context/StoreContext.jsx';
 import { fmtServiceWindow, toDate } from '../../data/format.js';
 
@@ -35,7 +36,7 @@ export default function Team() {
         next: upcoming[0] || null,
       };
     })
-    .filter((t) => `${t.name} ${t.trade} ${t.email}`.toLowerCase().includes(q.toLowerCase()))
+    .filter((t) => `${t.name} ${technicianTrades(t).join(' ')} ${t.email}`.toLowerCase().includes(q.toLowerCase()))
     .sort((a, b) => a.name.localeCompare(b.name)), [technicians, workOrders, q]);
 
   return (
@@ -61,7 +62,7 @@ export default function Team() {
                         <div><div style={{ fontWeight: 600 }}>{t.name}</div><div className="sub">{t.email}</div></div>
                       </div>
                     </td>
-                    <td>{t.trade ? <Pill tone="blue" size="sm">{t.trade}</Pill> : <span className="muted">Not set</span>}</td>
+                    <td>{t.trade ? <div className="row gap-8 wrap"><Pill tone="blue" size="sm">{t.trade}</Pill>{(t.additionalTrades || []).map((x) => <Pill key={x} tone="gray" size="sm">{x}</Pill>)}</div> : <span className="muted">Not set</span>}</td>
                     <td>
                       <div style={{ fontWeight: 600 }}>{t.open}</div>
                       {(t.inProgress > 0 || t.unscheduled > 0) && <div className="sub">{[t.inProgress && `${t.inProgress} in progress`, t.unscheduled && `${t.unscheduled} unscheduled`].filter(Boolean).join(' · ')}</div>}

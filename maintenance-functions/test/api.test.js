@@ -514,3 +514,16 @@ test("approval after routing setup stamps the owning manager and the request's c
   await call("mgrElec", "scheduleWorkOrder", {id, serviceDate: "2026-12-02", startTime: "09:00", durationHours: 1, timeZone: "America/Chicago"});
   await rejects(call("mgr", "scheduleWorkOrder", {id, serviceDate: "2026-12-02", startTime: "11:00", durationHours: 1, timeZone: "America/Chicago"}), "permission-denied");
 });
+
+test("requests from the older backend ('Submitted') and failed analyses can be reviewed", async () => {
+  db.seed("requests/legacy", {requesterId: "req", status: "Submitted", analysisStatus: "completed", routedCategory: "HVAC", priority: "Medium"});
+  db.seed("requests/aiFailed", {requesterId: "req", status: "submitted", analysisStatus: "failed", routedCategory: "HVAC", priority: "Medium"});
+  await call("mgr", "updateRequest", {id: "legacy", changes: {priority: "High"}});
+  assert.equal(db.read("requests/legacy").priority, "High");
+  await call("mgr", "rejectRequest", {id: "aiFailed", note: "Duplicate"});
+  assert.equal(db.read("requests/aiFailed").status, "Rejected");
+
+  db.seed("requests/analyzing", {requesterId: "req", status: "submitted", analysisStatus: "pending", routedCategory: "HVAC"});
+  await rejects(call("mgr", "updateRequest", {id: "analyzing", changes: {priority: "High"}}), "failed-precondition", /still being analyzed/);
+  await rejects(call("mgr", "rejectRequest", {id: "aiFailed", note: "again"}), "failed-precondition", /already been rejected/);
+});

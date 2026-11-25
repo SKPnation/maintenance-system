@@ -8,7 +8,7 @@ import { useStore } from '../../context/StoreContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { TRADES } from '../../data/mock.js';
 import ReviewHistory from '../../components/ReviewHistory.jsx';
-import { reviewChanges, reviewOutcome, withCurrent } from '../../data/review.js';
+import { isAwaitingReview, reviewChanges, reviewOutcome, withCurrent } from '../../data/review.js';
 import { fmtDateTime } from '../../data/format.js';
 import { tradesMatch } from '../../data/trades.js';
 
@@ -67,7 +67,7 @@ export default function ReviewWorkOrder() {
     return <div className="page-inner"><div className="card"><EmptyState title="Request not found" text={`We couldn't find ${id}.`} action={<Button to="/manager/queue">Back to My Queue</Button>} /></div></div>;
   }
 
-  const locked = !['submitted', 'pending review', 'pending_review'].includes(String(r.status || '').toLowerCase()) || r.analysisStatus !== 'completed';
+  const locked = !isAwaitingReview(r);
   const tech = technicians.find((t) => t.id === form.technicianId);
 
   const validate = () => {

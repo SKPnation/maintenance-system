@@ -1,3 +1,4 @@
+import { isAwaitingReview } from '../data/review.js';
 import { NavLink, useNavigate } from 'react-router-dom';
 import Icon, { BrandMark } from './Icon.jsx';
 import { NAV } from './navConfig.js';
@@ -26,7 +27,7 @@ export default function Sidebar({ role }) {
 
   const counts = {
     notifications: unreadCountFor(notifications, role),
-    queue: requests.filter((r) => r.status === 'Pending Review').length,
+    queue: requests.filter(isAwaitingReview).length,
   };
   const notif = { ...nav.notifications, badge: 'notifications' };
 

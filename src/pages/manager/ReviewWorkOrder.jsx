@@ -6,14 +6,13 @@ import {
 } from '../../components/ui.jsx';
 import { useStore } from '../../context/StoreContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
-import { TRADES } from '../../data/mock.js';
 import ReviewHistory from '../../components/ReviewHistory.jsx';
 import { isAwaitingReview, reviewChanges, reviewOutcome, withCurrent } from '../../data/review.js';
 import { fmtDateTime } from '../../data/format.js';
 import { tradesMatch } from '../../data/trades.js';
 
 // Snap the AI's free-text trade to one of the standard trades (or none).
-const standardTrade = (value) => TRADES.find((t) => tradesMatch(t, value)) || '';
+const standardTrade = (value, list) => list.find((t) => tradesMatch(t, value)) || '';
 
 function formatTimestamp(value) {
   if (!value) return 'Not available';
@@ -25,7 +24,7 @@ const CHIP_BY_PRIORITY = { Critical: 'chip-red', High: 'chip-red', Medium: 'chip
 
 export default function ReviewWorkOrder() {
   const { id } = useParams();
-  const { requests, technicians, approveRequest, rejectRequest, updateRequest, priorityNames, categoryNames } = useStore();
+  const { requests, technicians, approveRequest, rejectRequest, updateRequest, priorityNames, categoryNames, tradeNames } = useStore();
   const toast = useToast();
   const navigate = useNavigate();
   const r = requests.find((x) => x.id === id);
@@ -33,7 +32,7 @@ export default function ReviewWorkOrder() {
   const [form, setForm] = useState(() => ({
     category: r?.routedCategory || r?.ai?.category || '',
     priority: r?.priority || 'Medium',
-    trade: standardTrade(r?.ai?.trade),
+    trade: standardTrade(r?.reviewedTrade || r?.ai?.trade, tradeNames),
     safety: r?.safety ? 'Yes' : 'No',
     title: r ? `Inspect and service: ${r.description.split('.')[0].slice(0, 60)}` : '',
     description: r?.ai?.suggestedAction || '',
@@ -48,7 +47,7 @@ export default function ReviewWorkOrder() {
       ...previous,
       category: r.routedCategory || r.ai?.category || '',
       priority: r.priority || r.ai?.priority || 'Medium',
-      trade: standardTrade(r.reviewedTrade || r.ai?.trade),
+      trade: standardTrade(r.reviewedTrade || r.ai?.trade, tradeNames),
       safety: (r.safety ?? r.ai?.safetyFlag) ? 'Yes' : 'No',
       title: `Inspect and service: ${(r.description || '').split('.')[0].slice(0, 60)}`,
       description: r.ai?.suggestedAction || r.description || '',
@@ -140,7 +139,7 @@ export default function ReviewWorkOrder() {
               <div className="form-grid-2">
                 <Field label="Category" required hint={categoryChanged ? 'Save Changes to reroute before approving.' : undefined}><Select options={withCurrent(categoryNames, r.routedCategory)} value={form.category} onChange={set('category')} /></Field>
                 <Field label="Priority" required><Select options={withCurrent(priorityNames, r.priority)} value={form.priority} onChange={set('priority')} /></Field>
-                <Field label="Trade" required error={errors.trade}><Select placeholder="Select a trade" options={TRADES} value={form.trade} onChange={set('trade')} invalid={!!errors.trade} /></Field>
+                <Field label="Trade" required error={errors.trade}><Select placeholder="Select a trade" options={tradeNames} value={form.trade} onChange={set('trade')} invalid={!!errors.trade} /></Field>
                 <Field label="Safety Flag" required><Select options={['No', 'Yes']} value={form.safety} onChange={set('safety')} /></Field>
               </div>
               <Field label="Work Order Title" required error={errors.title}><Input value={form.title} onChange={set('title')} invalid={!!errors.title} /></Field>

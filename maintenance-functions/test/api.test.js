@@ -539,3 +539,48 @@ test("older requests with no analysis status or other status words can be review
   db.seed("requests/done", {requesterId: "req", status: "Completed", analysisStatus: "completed", routedCategory: "HVAC"});
   await rejects(call("mgr", "rejectRequest", {id: "done"}), "failed-precondition", /already completed/);
 });
+
+// ---------------- Trades ----------------
+
+const DEFAULT_TRADES = require("../trades").DEFAULT_TRADES;
+const tradeId = (name) => [...db.store.entries()].find(([k, v]) => k.startsWith("trades/") && v.name === name)[0].split("/")[1];
+
+test("admins import trades once; duplicates by meaning are rejected", async () => {
+  await rejects(call("mgr", "importTrades", {trades: DEFAULT_TRADES}), "permission-denied");
+  await rejects(call("admin", "saveTrade", {name: "Carpenter", active: true}), "failed-precondition", /first/);
+  await rejects(call("admin", "importTrades", {trades: [...DEFAULT_TRADES, {name: "HVAC", active: true}]}), "invalid-argument", /unique/);
+
+  assert.equal((await call("admin", "importTrades", {trades: DEFAULT_TRADES})).count, 4);
+  await rejects(call("admin", "importTrades", {trades: DEFAULT_TRADES}), "failed-precondition", /already saved/);
+
+  await call("admin", "saveTrade", {name: "Carpenter", description: "Doors and furniture", active: true});
+  await rejects(call("admin", "saveTrade", {name: "electric", active: true}), "already-exists", /Electrician/);
+  for (const uid of ["mgr", "tech", "req"]) {
+    await rejects(call(uid, "saveTrade", {name: "Painter", active: true}), "permission-denied");
+  }
+});
+
+test("used trades can't be renamed; inactive trades can't be newly chosen but can be kept", async () => {
+  await call("admin", "importTrades", {trades: DEFAULT_TRADES});
+  // tech/tech2 are seeded with trade "HVAC Technician".
+  await rejects(call("admin", "saveTrade", {id: tradeId("HVAC Technician"), name: "HVAC Engineer", active: true}), "failed-precondition", /can't be renamed/);
+  await call("admin", "saveTrade", {id: tradeId("Plumber"), name: "Plumber", description: "", active: false});
+
+  db.seed("requests/tr1", {requesterId: "req", status: "submitted", analysisStatus: "completed", routedCategory: "HVAC", priority: "Medium", ai: {trade: "Plumber"}});
+  await rejects(call("mgr", "updateRequest", {id: "tr1", changes: {trade: "Plumbing"}}), "invalid-argument", /Trade must be one of/);
+  await call("mgr", "updateRequest", {id: "tr1", changes: {trade: "hvac tech"}});
+  assert.equal(db.read("requests/tr1").reviewedTrade, "HVAC Technician", "stored as the canonical name");
+
+  // Approval may keep the request's own (now inactive) trade.
+  db.seed("requests/tr2", {requesterId: "req", status: "submitted", analysisStatus: "completed", routedCategory: "HVAC", priority: "Medium", ai: {trade: "Plumber"}});
+  const {id} = await call("mgr", "approveRequest", {requestId: "tr2", workOrder: {title: "x", description: "y", trade: "Plumber", priority: "Medium", safety: false}});
+  assert.equal(db.read(`workOrders/${id}`).trade, "Plumber");
+});
+
+test("technician accounts need an active trade", async () => {
+  await call("admin", "importTrades", {trades: DEFAULT_TRADES});
+  await call("admin", "saveTrade", {id: tradeId("Plumber"), name: "Plumber", description: "", active: false});
+  await rejects(call("admin", "updateUser", {uid: "tech", trade: "Plumber"}), "invalid-argument", /Trade must be one of/);
+  await call("admin", "updateUser", {uid: "tech", trade: "electrician"});
+  assert.equal(db.read("users/tech").trade, "Electrician");
+});

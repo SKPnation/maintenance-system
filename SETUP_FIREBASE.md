@@ -47,6 +47,8 @@ Change the temporary password immediately. For production use, switch to an invi
 - PB-35 Help and emergency contact: admins set the facilities contact on **System Settings** (`settings/support`). Requester pages show the number only when it is marked verified; otherwise they show the guidance without any number or call link.
 - PB-39 Priority definitions: blocked deletes now offer **Deactivate instead**. A request or work order can keep a priority that has been deactivated; only new choices must be active.
 
+- Trades: stored in `trades` (admin-only `importTrades`, `saveTrade`; all active users can read). Until an admin clicks **Save to database** on Trades, the built-in list (HVAC Technician, Electrician, Plumber, General Maintenance) is used. The AI is told the active trades and its answer is mapped to one ("HVAC" → "HVAC Technician"). New technician trades, manager trade corrections and new work-order trades must be active; existing records can keep a deactivated trade. Trades used by technicians or work orders can't be renamed.
+
 ### Tests
 `cd maintenance-functions && npm test` runs the scheduling/status/note, routing, review, asset and support rules and the callable handlers against an in-memory Firestore stand-in (access control, conflicts, history, ordering). Re-run against the Firebase Emulator Suite before production.
 

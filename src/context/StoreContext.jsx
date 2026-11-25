@@ -19,6 +19,8 @@ import {
 import {
   ASSETS,
   CATEGORIES,
+  TRADES,
+  TRADE_DESCRIPTIONS,
   NOTIFICATIONS,
   PRIORITIES,
   REQUESTS,
@@ -197,7 +199,8 @@ export function StoreProvider({ children }) {
     priorityLevels: [],
     categories: [],
     managers: [],
-    assets: []
+    assets: [],
+    trades: []
   });
 
   // settings/routing exists once an admin has set up routing (PB-13);
@@ -244,7 +247,8 @@ export function StoreProvider({ children }) {
         priorityLevels: [],
         categories: [],
         managers: [],
-        assets: []
+        assets: [],
+        trades: []
       });
 
       return;
@@ -319,6 +323,11 @@ export function StoreProvider({ children }) {
         collection(db, 'categories')
       ],
 
+      [
+        'trades',
+        collection(db, 'trades')
+      ],
+
       ...(user.role !== 'requester'
         ? [['assets', collection(db, 'assets')]]
         : []),
@@ -335,7 +344,7 @@ export function StoreProvider({ children }) {
           ]
         : []),
 
-      ...(user.role === 'manager'
+      ...(['manager', 'admin'].includes(user.role)
         ? [
             [
               'technicians',
@@ -799,6 +808,17 @@ export function StoreProvider({ children }) {
       return Promise.resolve();
     },
 
+    // Trades: first save copies the built-in list; then each edit is saved.
+    importTrades() {
+      return api('importTrades', {
+        trades: TRADES.map((name) => ({ name, description: TRADE_DESCRIPTIONS[name] || '', active: true }))
+      });
+    },
+
+    saveTrade(trade) {
+      return api('saveTrade', trade);
+    },
+
     importPriorities() {
       return api('importPriorityLevels', {
         levels: state.priorities.map(({ id, isNew, ...level }) => level)
@@ -861,6 +881,13 @@ export function StoreProvider({ children }) {
     : state.priorities;
   const priorityNames = priorities.filter((p) => p.active).map((p) => p.name);
 
+  // Trades: saved trades, or the built-in list until an admin saves them.
+  const tradesSaved = configured && remote.trades.length > 0;
+  const trades = tradesSaved
+    ? [...remote.trades].sort((a, b) => a.name.localeCompare(b.name))
+    : TRADES.map((name) => ({ id: name, name, description: TRADE_DESCRIPTIONS[name] || '', active: true }));
+  const tradeNames = trades.filter((t) => t.active).map((t) => t.name);
+
   // Categories: saved routing categories, or the built-in list before setup.
   const categories = routingConfigured && remote.categories.length
     ? [...remote.categories].sort((a, b) => (a.rank || 999) - (b.rank || 999))
@@ -899,6 +926,10 @@ export function StoreProvider({ children }) {
               managers: remote.managers
             }
           : { managers: [] }),
+
+        trades,
+        tradesSaved,
+        tradeNames,
 
         categories,
         categoryNames,

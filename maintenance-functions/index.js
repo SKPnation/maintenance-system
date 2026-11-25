@@ -193,27 +193,33 @@ function ensureManagerCategory(record, manager) {
   }
 }
 
-// Older records use "Submitted" / "pending_review"; failed AI analysis means
-// the request waits for manual review rather than being stuck.
-const REVIEWABLE_STATUSES = ["submitted", "pending review", "pending_review"];
+// A request can be reviewed until it is approved (has a work order) or closed.
+// Older records may use other status words ("Submitted", "Under Review") or
+// have no analysisStatus at all (created before AI analysis); those are
+// reviewed manually. Only a request whose analysis is running right now waits.
+const FINAL_STATUSES = ["approved", "rejected", "cancelled", "canceled", "completed", "closed"];
 
 function awaitingReview(record) {
-  return ["completed", "failed"].includes(record.analysisStatus) &&
-    REVIEWABLE_STATUSES.includes(String(record.status || "").trim().toLowerCase()) &&
-    !record.workOrderId;
+  const status = String(record.status || "").trim().toLowerCase();
+
+  return !record.workOrderId &&
+    !FINAL_STATUSES.includes(status) &&
+    record.analysisStatus !== "pending";
 }
 
 function ensurePendingReview(record) {
   if (awaitingReview(record)) return;
 
   const status = String(record.status || "").trim().toLowerCase();
-  let reason = "This request is not awaiting manager review.";
+  let reason = `This request can't be reviewed (status: ${record.status || "none"}).`;
 
   if (record.workOrderId || status === "approved") {
     reason = "This request has already been approved and has a work order.";
   } else if (status === "rejected") {
     reason = "This request has already been rejected.";
-  } else if (!["completed", "failed"].includes(record.analysisStatus)) {
+  } else if (FINAL_STATUSES.includes(status)) {
+    reason = `This request is already ${status}.`;
+  } else if (record.analysisStatus === "pending") {
     reason = "This request is still being analyzed. Try again in a moment.";
   }
 

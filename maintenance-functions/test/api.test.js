@@ -527,3 +527,15 @@ test("requests from the older backend ('Submitted') and failed analyses can be r
   await rejects(call("mgr", "updateRequest", {id: "analyzing", changes: {priority: "High"}}), "failed-precondition", /still being analyzed/);
   await rejects(call("mgr", "rejectRequest", {id: "aiFailed", note: "again"}), "failed-precondition", /already been rejected/);
 });
+
+test("older requests with no analysis status or other status words can be reviewed", async () => {
+  db.seed("requests/old1", {requesterId: "req", status: "Submitted", routedCategory: "HVAC", priority: "Medium", ai: null});
+  db.seed("requests/old2", {requesterId: "req", status: "Under Review", analysisStatus: "completed", routedCategory: "HVAC", priority: "Medium"});
+  await call("mgr", "rejectRequest", {id: "old1", note: "Old duplicate"});
+  assert.equal(db.read("requests/old1").status, "Rejected");
+  await call("mgr", "updateRequest", {id: "old2", changes: {priority: "High"}});
+  assert.equal(db.read("requests/old2").priority, "High");
+
+  db.seed("requests/done", {requesterId: "req", status: "Completed", analysisStatus: "completed", routedCategory: "HVAC"});
+  await rejects(call("mgr", "rejectRequest", {id: "done"}), "failed-precondition", /already completed/);
+});
